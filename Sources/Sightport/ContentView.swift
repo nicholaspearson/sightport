@@ -53,8 +53,7 @@ struct ContentView: View {
             Spacer()
             IconAction(symbol: "folder.badge.plus", title: "Open kubeconfig (⌘O)") { workspace.chooseFile() }
             IconAction(symbol: "arrow.clockwise", title: "Refresh current view (⌘R)") { workspace.refresh() }
-            if workspace.page != .cluster(.resources(.pods)), workspace.page != .cluster(.argoDashboard),
-               workspace.page != .cluster(.portForwarding) {
+            if usesBottomInspector {
                 Rectangle().fill(Palette.line).frame(width: 1, height: 13)
                 IconAction(symbol: "rectangle.bottomthird.inset.filled",
                            title: showsInspector ? "Hide inspector" : "Show inspector") { showsInspector.toggle() }
@@ -65,11 +64,33 @@ struct ContentView: View {
         .background(Palette.surface)
     }
 
+    private var usesBottomInspector: Bool {
+        switch workspace.page {
+        case .cluster(.resources(.pods)), .cluster(.argoDashboard), .cluster(.portForwarding):
+            return false
+        default: return workspace.page.configDataKind == nil
+        }
+    }
+
     private var center: some View {
         VStack(spacing: 0) {
             tabBar
             if workspace.page == .cluster(.resources(.pods)) {
                 podWorkspace.id(workspace.connectedContext)
+            } else if let kind = workspace.page.configDataKind, let context = workspace.connectedContext {
+                GeometryReader { area in
+                    resourceSplit(kind, width: area.size.width) { row in
+                        let showNamespace = { workspace.showNamespace(of: row) }
+                        let close = { workspace.select(nil) }
+                        if kind == .configMaps {
+                            ConfigMapInspector(context: context, row: row, onShowNamespace: showNamespace, onClose: close)
+                        } else {
+                            SecretInspector(context: context, row: row, onShowNamespace: showNamespace, onClose: close)
+                        }
+                    }
+                }
+                .id(kind)
+                .id(context)
             } else if workspace.page == .cluster(.argoDashboard) {
                 ClusterResourceTable(workspace: workspace, section: .argoDashboard)
                     .id(workspace.connectedContext)
@@ -84,27 +105,32 @@ struct ContentView: View {
     }
 
     private func endWindowSessions() {
+        if workspace.page.configDataKind != nil { workspace.select(nil) }
         workspace.closePodTerminals()
         workspace.portForwards.stopAll()
     }
 
+    private func resourceSplit<Details: View>(_ kind: ResourceKind, width: CGFloat,
+                                              @ViewBuilder details: (ResourceRow) -> Details) -> some View {
+        let tableMinimum = min(300, max(218, width - 274))
+        let detailsMinimum = min(272, max(220, width - tableMinimum - 1))
+        return HSplitView {
+            ClusterResourceTable(workspace: workspace, section: .resources(kind))
+                .frame(minWidth: tableMinimum, idealWidth: width * 0.59, maxWidth: .infinity, maxHeight: .infinity)
+            if let row = workspace.selectedResource(in: kind) {
+                details(row).id(row.id)
+                    .frame(minWidth: detailsMinimum, idealWidth: max(detailsMinimum, width * 0.41),
+                           maxWidth: max(detailsMinimum, width - tableMinimum - 1), maxHeight: .infinity)
+            }
+        }
+    }
+
     private var podWorkspace: some View {
         GeometryReader { geometry in
-            let width = geometry.size.width
-            let tableMinimum = min(300, max(218, width - 274))
-            let detailsMinimum = min(272, max(220, width - tableMinimum - 1))
             let logsMinimum = min(220, max(148, geometry.size.height * 0.26))
             VSplitView {
-                HSplitView {
-                    ClusterResourceTable(workspace: workspace, section: .resources(.pods))
-                        .frame(minWidth: tableMinimum, idealWidth: width * 0.59,
-                               maxWidth: .infinity, maxHeight: .infinity)
-                    if let row = workspace.selectedPod {
-                        PodInspector(workspace: workspace, row: row) { workspace.select(nil) }
-                            .id(row.id)
-                            .frame(minWidth: detailsMinimum, idealWidth: max(detailsMinimum, width * 0.41),
-                                   maxWidth: max(detailsMinimum, width - tableMinimum - 1), maxHeight: .infinity)
-                    }
+                resourceSplit(.pods, width: geometry.size.width) { row in
+                    PodInspector(workspace: workspace, row: row) { workspace.select(nil) }
                 }
                 .frame(minHeight: 160, maxHeight: .infinity)
                 .layoutPriority(1)

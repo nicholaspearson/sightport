@@ -5,6 +5,11 @@ import XCTest
 // Kubeconfig extensions can hold arbitrary JSON. Rendering a projection against this
 // local document exercises kubectl's actual Go-template engine without a cluster.
 func projectResource(_ kind: ResourceKind, items: [[String: Any]]) throws -> [ResourceRow] {
+    let result = try renderProjection(kind.listTemplate, object: ["items": items])
+    return try ResourceRow.decodeList(result, kind: kind)
+}
+
+func renderProjection(_ template: String, object: [String: Any]) throws -> Data {
     let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
         + ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
     guard let executable = paths.map({ URL(fileURLWithPath: $0).appendingPathComponent("kubectl") })
@@ -14,17 +19,17 @@ func projectResource(_ kind: ResourceKind, items: [[String: Any]]) throws -> [Re
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: file) }
     let config: [String: Any] = ["apiVersion": "v1", "kind": "Config",
-                                 "extensions": [["name": "resources", "extension": ["items": items]]]]
+                                 "extensions": [["name": "resources", "extension": object]]]
     try JSONSerialization.data(withJSONObject: config, options: [.withoutEscapingSlashes]).write(to: file)
     let process = Process()
     process.executableURL = executable
     process.arguments = ["--kubeconfig=" + file.path, "config", "view", "-o",
-                         "go-template={{range .extensions}}{{with .extension}}" + kind.listTemplate + "{{end}}{{end}}"]
+                         "go-template={{range .extensions}}{{with .extension}}" + template + "{{end}}{{end}}"]
     let pipe = Pipe()
     process.standardOutput = pipe
     try process.run()
     let result = pipe.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else { throw ResourceReadError.invalidList }
-    return try ResourceRow.decodeList(result, kind: kind)
+    return result
 }

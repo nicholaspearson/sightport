@@ -11,7 +11,11 @@ Download the Sightport ZIP for Intel and Apple silicon Macs, unzip it, and move 
 3. Click a context in the left rail to connect. You can also select a row to inspect it, then choose **Connect**, or double-click the row. Sightport uses that exact file and context to request the API version and makes the context active when the request succeeds. Your kubeconfig’s authentication method runs for this request.
 4. Click a context’s star to favorite it, or use its shortcut menu in the rail. Favorites appear at the top of the rail and in the **Favorites** tab. Unavailable favorites retain their file and context name so they can reappear when the file is available.
 
-After a successful connection, Sightport opens **Namespaces**. Double-click a namespace to view its pods. The connected navigator also includes **Nodes**, **Workloads**, and **Config**. Select a resource to inspect its fields, or open **Workloads → Overview** for counts by kind. Secrets and Config Maps show metadata and key counts.
+After a successful connection, Sightport opens **Namespaces**. Double-click a namespace to view its pods. The connected navigator also includes **Nodes**, **Workloads**, and **Config**. Select a resource to inspect its fields, or open **Workloads → Overview** for counts by kind.
+
+In **Config → Config Maps**, select a Config Map to read its keys and values beside the list. Expand **Labels** or **Annotations** to inspect its metadata. Text values preserve their formatting, and binary values are shown as Base64.
+
+In **Config → Secrets**, select a Secret to open its properties, related events, and data keys beside the list. Values start hidden. Use the eye beside a key to reveal its value or hide it again. Binary values are available as Base64. Listing Secrets and reading an individual Secret use the permissions of the connected context.
 
 The namespace selector applies to namespaced resources and the workload overview. It starts with the kubeconfig’s namespace, or `default`. Choose **All namespaces** to list objects across namespaces, or **Enter namespace…** to use a known namespace when your account cannot list namespaces. Cluster-scoped views are labeled **Cluster-wide**. Press ⌘R to refresh the current view.
 

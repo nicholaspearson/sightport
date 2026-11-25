@@ -110,8 +110,8 @@ public struct KubernetesClient: Sendable {
         return String(decoding: output.suffix(limit), as: UTF8.self)
     }
 
-    private func resourceOutput(_ kind: ResourceKind, in file: URL, context: String,
-                                namespace: String?, template: String) async throws -> Data {
+    func resourceOutput(_ kind: ResourceKind, in file: URL, context: String,
+                        namespace: String?, template: String, fieldSelector: String? = nil) async throws -> Data {
         guard !context.isEmpty else { throw KubernetesError.missingContext }
         var arguments = ["--context=\(context)", "--request-timeout=8s", "get", kind.resourceName]
         if kind.isNamespaced {
@@ -121,6 +121,7 @@ public struct KubernetesClient: Sendable {
             } else { arguments.append("--all-namespaces") }
         }
         if let selector = kind.argoLabelSelector { arguments.append("--selector=" + selector) }
+        if let fieldSelector { arguments.append("--field-selector=" + fieldSelector) }
         arguments += ["-o", "go-template=" + template]
         return try await run(arguments, file: file, operation: .resources(kind, namespace))
     }
@@ -196,6 +197,16 @@ public struct KubernetesClient: Sendable {
             worker.cancel()
         }
     }
+
+    func selectedNamespace(for row: ResourceRow, context: String, missing: KubernetesError) throws -> String {
+        guard !context.isEmpty, !context.utf8.contains(0) else { throw KubernetesError.missingContext }
+        guard let namespace = row.namespace, !namespace.isEmpty,
+              !row.name.isEmpty, !row.id.isEmpty, row.id != namespace + "/" + row.name,
+              [row.name, namespace, row.id].allSatisfy({ !$0.contains("/") && !$0.utf8.contains(0) }) else {
+            throw missing
+        }
+        return namespace
+    }
 }
 
 private struct ContextList: Decodable {
@@ -219,6 +230,7 @@ private struct ContextList: Decodable {
 
 enum ClusterReadOperation {
     case discovery, connection, resources(ResourceKind, String?), podMetrics, podLogs
+    case secretDetails, configMapDetails
     case customResources(String, String?), helmReleases
 
     var command: String {
@@ -231,6 +243,8 @@ enum KubernetesError: LocalizedError {
     case missingKubectl, missingHelm, unreadableFile, launch, invalidContexts, missingContext
     case helmLaunch, helmUnavailable, helmDenied, customResourceDenied(String), customResourceUnavailable(String)
     case resourceDenied(ResourceKind, String?), unsupported(ResourceKind), namespaceMissing(String)
+    case secretDenied, secretMissing, secretUnavailable
+    case configMapDenied, configMapMissing, configMapUnavailable
     case metricsDenied, metricsUnavailable, logsDenied, logTargetMissing, containerWaiting, previousUnavailable, logsUnavailable
     case unavailable, authentication, denied, certificate, credentialHelper, timeout, unexpectedServer, output
 
@@ -248,6 +262,12 @@ enum KubernetesError: LocalizedError {
         case .invalidContexts: return "kubectl could not read the contexts. Check the kubeconfig file and your kubectl installation."
         case .missingContext: return "This context is missing from the kubeconfig. Choose an available context."
         case .unavailable: return "Could not reach the Kubernetes API. Check the server address, network, and VPN."
+        case .secretDenied: return "Access denied. This context cannot get this Secret."
+        case .secretMissing: return "This Secret is no longer available. Refresh the Secrets list."
+        case .secretUnavailable: return "Could not read the selected Secret."
+        case .configMapDenied: return "Access denied. This context cannot get this Config Map."
+        case .configMapMissing: return "This Config Map is no longer available. Refresh the Config Maps list."
+        case .configMapUnavailable: return "Could not read the selected Config Map."
         case .authentication: return "The cluster rejected these credentials. Refresh your login and test again."
         case .resourceDenied(let kind, let namespace):
             let scope = kind.isNamespaced ? (namespace.map { " in namespace “" + $0 + "”" } ?? " across all namespaces") : ""
@@ -303,6 +323,8 @@ enum KubernetesError: LocalizedError {
             case .podMetrics: return .metricsDenied
             case .podLogs: return .logsDenied
             case .helmReleases: return .helmDenied
+            case .secretDetails: return .secretDenied
+            case .configMapDetails: return .configMapDenied
             default: return .denied
             }
         }
@@ -310,6 +332,14 @@ enum KubernetesError: LocalizedError {
         if message.contains("getting credentials") || message.contains("exec plugin") { return .credentialHelper }
         if message.contains("timeout") || message.contains("deadline exceeded") { return .timeout }
         if case .helmReleases = operation { return .helmUnavailable }
+        if case .configMapDetails = operation {
+            if message.contains("notfound") || message.contains("not found") { return .configMapMissing }
+            return .configMapUnavailable
+        }
+        if case .secretDetails = operation {
+            if message.contains("notfound") || message.contains("not found") { return .secretMissing }
+            return .secretUnavailable
+        }
         if case .podMetrics = operation { return .metricsUnavailable }
         if case .podLogs = operation {
             if message.contains("previous terminated container") { return .previousUnavailable }

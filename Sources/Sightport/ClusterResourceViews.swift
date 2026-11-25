@@ -27,7 +27,7 @@ struct ClusterResourceTable: View {
 
     var body: some View {
         GeometryReader { area in
-            resourceList(compact: kind == .pods && area.size.width < 425)
+            resourceList(compact: (kind == .pods || workspace.page.configDataKind != nil) && area.size.width < 425)
         }
     }
 

@@ -52,6 +52,11 @@ enum WorkbenchPage: Hashable {
     case file(URL)
     case cluster(ClusterSection)
 
+    var configDataKind: ResourceKind? {
+        guard case .cluster(.resources(let kind)) = self, kind == .configMaps || kind == .secrets else { return nil }
+        return kind
+    }
+
     var title: String {
         switch self {
         case .contexts: return "Contexts"
@@ -146,8 +151,8 @@ final class Workspace: ObservableObject {
     @Published private(set) var activeDrawerTab: PodDrawerTab?
     @Published private(set) var podDrawerCollapsed = false
 
-    var selectedPod: ResourceRow? {
-        guard page == .cluster(.resources(.pods)), case .resource(let id) = selection else { return nil }
+    func selectedResource(in kind: ResourceKind) -> ResourceRow? {
+        guard page == .cluster(.resources(kind)), case .resource(let id) = selection else { return nil }
         return rows.first { $0.id == id }
     }
 
@@ -191,6 +196,7 @@ final class Workspace: ObservableObject {
         if !tabs.contains(destination) { tabs.append(destination) }
         guard page != destination else { return }
         if page == .cluster(.resources(.pods)) { closePodLogs() }
+        if page.configDataKind != nil { select(nil) }
         page = destination
         if case .cluster(let section) = destination {
             loadSection(section)
@@ -299,7 +305,7 @@ final class Workspace: ObservableObject {
         case .cluster:
             if case .resource(let id) = previous, rows.contains(where: { $0.id == id }) {
                 select(previous)
-            } else if page == .cluster(.resources(.pods)) {
+            } else if page == .cluster(.resources(.pods)) || page.configDataKind != nil {
                 select(nil)
             } else { select(rows.first.map { .resource($0.id) }) }
         case .files:
@@ -448,6 +454,7 @@ extension Workspace {
         let value = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let scope = value?.isEmpty == true ? nil : value
         guard connectedContext != nil, scope != namespaceFilter else { return }
+        if page.configDataKind != nil { select(nil) }
         namespaceFilter = scope
         if case .cluster(let section) = page, section.isNamespaced {
             loadSection(section)
@@ -643,8 +650,9 @@ extension Workspace {
                                         previous: previous)
     }
 
-    func showPodNamespace(_ row: ResourceRow) {
-        guard isVisiblePod(row), let name = row.namespace else { return }
+    func showNamespace(of row: ResourceRow) {
+        guard case .cluster(.resources) = page, rows.contains(where: { $0.id == row.id }),
+              let name = row.namespace else { return }
         reveal(.namespaces, name: name)
     }
 

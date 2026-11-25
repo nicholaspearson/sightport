@@ -20,6 +20,8 @@
 		CBE61CB8C9A924ECD06413B7 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B766AAC0CDB8DBBA175C36 /* ContentView.swift */; };
 		EF2A3A93725042CC8362A4C1 /* ArgoDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2BF0DDE969741CE81992899 /* ArgoDashboardView.swift */; };
 		B7439FEE8EB74957813ED93A /* PortForwardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7439FEE8EB74957813ED93B /* PortForwardingView.swift */; };
+		4258571A5AD249979ABBE7AB /* SecretInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DD07ECE81A041D99160EB25 /* SecretInspector.swift */; };
+		45C0197BA26F48108CC15921 /* ConfigMapInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F9A0F6DA25F404D8094DECD /* ConfigMapInspector.swift */; };
 		6C927B3ADCA14DBE9FF97A1A /* PodTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FEB00F35735466788FA7A8C /* PodTerminalView.swift */; };
 		1907F477588447608DB57890 /* PodLogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 876E7836B8BB48DDBAAB99FC /* PodLogsView.swift */; };
 		71B5D843883842C8A7C54BCF /* PodsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA1E6AC020947B78C74D69F /* PodsView.swift */; };
@@ -42,6 +44,8 @@
 		92B766AAC0CDB8DBBA175C36 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		F2BF0DDE969741CE81992899 /* ArgoDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArgoDashboardView.swift; sourceTree = "<group>"; };
 		B7439FEE8EB74957813ED93B /* PortForwardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortForwardingView.swift; sourceTree = "<group>"; };
+		7DD07ECE81A041D99160EB25 /* SecretInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretInspector.swift; sourceTree = "<group>"; };
+		3F9A0F6DA25F404D8094DECD /* ConfigMapInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigMapInspector.swift; sourceTree = "<group>"; };
 		0FEB00F35735466788FA7A8C /* PodTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodTerminalView.swift; sourceTree = "<group>"; };
 		876E7836B8BB48DDBAAB99FC /* PodLogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLogsView.swift; sourceTree = "<group>"; };
 		ADA1E6AC020947B78C74D69F /* PodsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodsView.swift; sourceTree = "<group>"; };
@@ -101,6 +105,8 @@
 				92B766AAC0CDB8DBBA175C36 /* ContentView.swift */,
 				F2BF0DDE969741CE81992899 /* ArgoDashboardView.swift */,
 				B7439FEE8EB74957813ED93B /* PortForwardingView.swift */,
+				7DD07ECE81A041D99160EB25 /* SecretInspector.swift */,
+				3F9A0F6DA25F404D8094DECD /* ConfigMapInspector.swift */,
 				0FEB00F35735466788FA7A8C /* PodTerminalView.swift */,
 				876E7836B8BB48DDBAAB99FC /* PodLogsView.swift */,
 				ADA1E6AC020947B78C74D69F /* PodsView.swift */,
@@ -222,6 +228,8 @@
 				CBE61CB8C9A924ECD06413B7 /* ContentView.swift in Sources */,
 				EF2A3A93725042CC8362A4C1 /* ArgoDashboardView.swift in Sources */,
 				B7439FEE8EB74957813ED93A /* PortForwardingView.swift in Sources */,
+				4258571A5AD249979ABBE7AB /* SecretInspector.swift in Sources */,
+				45C0197BA26F48108CC15921 /* ConfigMapInspector.swift in Sources */,
 				6C927B3ADCA14DBE9FF97A1A /* PodTerminalView.swift in Sources */,
 				1907F477588447608DB57890 /* PodLogsView.swift in Sources */,
 				71B5D843883842C8A7C54BCF /* PodsView.swift in Sources */,
@@ -370,13 +378,13 @@
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = app.sightport.mac;
 				SIGHTPORT_UPDATE_FEED_URL = "https://github.com/nicholaspearson/sightport/releases/latest/download/appcast.xml";
 				SIGHTPORT_UPDATE_PUBLIC_KEY = "SBN8+q6wqpwW65v0Cj0eDU3KrIxQ+KlMM20oKmi+17U=";
@@ -390,13 +398,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = app.sightport.mac;
 				SIGHTPORT_UPDATE_FEED_URL = "https://github.com/nicholaspearson/sightport/releases/latest/download/appcast.xml";
 				SIGHTPORT_UPDATE_PUBLIC_KEY = "SBN8+q6wqpwW65v0Cj0eDU3KrIxQ+KlMM20oKmi+17U=";

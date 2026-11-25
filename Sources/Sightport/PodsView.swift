@@ -133,7 +133,7 @@ struct PodsTable: View {
             }
         }.width(31)
         TableColumn("Namespace", value: \.namespace) { item in
-            PodLink(value: item.namespace, action: { workspace.showPodNamespace(item.row) })
+            PodLink(value: item.namespace, action: { workspace.showNamespace(of: item.row) })
         }.width(min: 85, ideal: 112)
     }
 
@@ -212,7 +212,7 @@ private struct PodActions: View {
         Button("Copy namespace/name") { copyPodNames([row]) }
         Divider()
         if row.namespace != nil {
-            Button("Show namespace") { workspace.showPodNamespace(row) }
+            Button("Show namespace") { workspace.showNamespace(of: row) }
         }
         if workspace.podOwnerKind(row) != nil {
             Button("Show controller") { workspace.showPodOwner(row) }
@@ -435,7 +435,7 @@ struct PodInspector: View {
         }
         field("Name") { Text(verbatim: row.name).textSelection(.enabled) }
         if let ns = row.namespace {
-            field("Namespace") { PodLink(value: ns, wraps: true) { workspace.showPodNamespace(row) } }
+            field("Namespace") { PodLink(value: ns, wraps: true) { workspace.showNamespace(of: row) } }
         }
         if let pod = row.pod {
             metadata("Labels", count: pod.labels.count, expanded: $labelsExpanded) {

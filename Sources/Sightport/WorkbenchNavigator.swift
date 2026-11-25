@@ -266,16 +266,8 @@ struct WorkbenchNavigator: View {
         .accessibilityLabel("Connected cluster " + context.name)
         clusterRow(.resources(.namespaces), title: ResourceKind.namespaces.title, symbol: "square.grid.2x2")
         clusterRow(.resources(.nodes), title: ResourceKind.nodes.title, symbol: "server.rack")
-        group(.argo, symbol: "arrow.triangle.2.circlepath")
-        if expanded.contains(.argo) {
-            clusterRow(.argoDashboard, title: "Dashboard")
-            resourceRows(ResourceKind.argoResources)
-            group(.argoSettings, symbol: "gearshape")
-                .padding(.leading, 15)
-            if expanded.contains(.argoSettings) { resourceRows(ResourceKind.argoSettings).padding(.leading, 15) }
-        }
-        group(.karpenter, symbol: "square.3.layers.3d")
-        if expanded.contains(.karpenter) { resourceRows(ResourceKind.karpenter) }
+        clusterRow(.resources(.events), title: ResourceKind.events.title, symbol: "clock")
+            .padding(.bottom, 6)
         group(.workloads, symbol: "shippingbox")
         if expanded.contains(.workloads) {
             clusterRow(.overview, title: "Overview")
@@ -286,7 +278,6 @@ struct WorkbenchNavigator: View {
         networkNavigation
         group(.storage, symbol: "externaldrive")
         if expanded.contains(.storage) { resourceRows(ResourceKind.storage) }
-        clusterRow(.resources(.events), title: "Events", symbol: "clock")
         group(.helm, symbol: "helm")
         if expanded.contains(.helm) { clusterRow(.helmReleases, title: "Releases") }
         group(.access, symbol: "shield.lefthalf.filled")
@@ -300,6 +291,16 @@ struct WorkbenchNavigator: View {
                 }
             }
         }
+        group(.argo, symbol: "arrow.triangle.2.circlepath")
+        if expanded.contains(.argo) {
+            clusterRow(.argoDashboard, title: "Dashboard")
+            resourceRows(ResourceKind.argoResources)
+            group(.argoSettings, symbol: "gearshape")
+                .padding(.leading, 15)
+            if expanded.contains(.argoSettings) { resourceRows(ResourceKind.argoSettings).padding(.leading, 15) }
+        }
+        group(.karpenter, symbol: "square.3.layers.3d")
+        if expanded.contains(.karpenter) { resourceRows(ResourceKind.karpenter) }
     }
 
     @ViewBuilder private var networkNavigation: some View {
