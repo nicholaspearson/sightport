@@ -1,0 +1,475 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		EACE00000000000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = EACE00000000000000000002 /* Sparkle */; };
+		A7E000000000000000000001 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A7E000000000000000000002 /* SwiftTerm */; };
+		02CF320A10A94EBE453F5E6E /* WorkbenchRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EEFABEE46059E2780C687E4 /* WorkbenchRecord.swift */; };
+		13435A9B5E8CA14C22121C15 /* WorkbenchInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD81C20214A7245C986CFF98 /* WorkbenchInspector.swift */; };
+		1C3704113FE60A04322C8198 /* SightportCore in Frameworks */ = {isa = PBXBuildFile; productRef = 0CE8D03C4FB5ABD2410A4ECB /* SightportCore */; };
+		30B3140C6B2614B700F71D55 /* WorkbenchNavigator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8288046A7FE448CC6D132EF /* WorkbenchNavigator.swift */; };
+		4F8D0538079340C631AA6054 /* SightportApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3890AB96ED2A106FA5798B75 /* SightportApp.swift */; };
+		8AEED39F8A386108E3B53F57 /* SightportMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = AADBB74B21B072F2393F28EF /* SightportMark.swift */; };
+		94DE3F6DF8405DD038DD498F /* Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79488D99B821B22DD468F49E /* Workspace.swift */; };
+		A7466793D34D40FCA61576A1 /* ClusterResourceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A6F3A9F67AE49B096DCCE10 /* ClusterResourceViews.swift */; };
+		CBE61CB8C9A924ECD06413B7 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B766AAC0CDB8DBBA175C36 /* ContentView.swift */; };
+		EF2A3A93725042CC8362A4C1 /* ArgoDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2BF0DDE969741CE81992899 /* ArgoDashboardView.swift */; };
+		B7439FEE8EB74957813ED93A /* PortForwardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7439FEE8EB74957813ED93B /* PortForwardingView.swift */; };
+		6C927B3ADCA14DBE9FF97A1A /* PodTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FEB00F35735466788FA7A8C /* PodTerminalView.swift */; };
+		1907F477588447608DB57890 /* PodLogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 876E7836B8BB48DDBAAB99FC /* PodLogsView.swift */; };
+		71B5D843883842C8A7C54BCF /* PodsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA1E6AC020947B78C74D69F /* PodsView.swift */; };
+		A7E000000000000000000005 /* PodTerminalSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E000000000000000000004 /* PodTerminalSurface.swift */; };
+		CC8BD1B6A4659B4EB9EFC518 /* Style.swift in Sources */ = {isa = PBXBuildFile; fileRef = C39999ACA3F18E584E593087 /* Style.swift */; };
+		DB24F90A1036197A535AD1EF /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 0B634F73CC4EC71BDA02D6C1 /* AppIcon.icns */; };
+		A7E000000000000000000007 /* SwiftTerm-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = A7E000000000000000000006 /* SwiftTerm-LICENSE.txt */; };
+		72BF66873176421CA4710701 /* Sparkle-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 72BF66873176421CA4710700 /* Sparkle-LICENSE.txt */; };
+		E29C0C9B4CF2F30008B3E655 /* WorkbenchTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FDB26629AF054472E4ABC6C /* WorkbenchTable.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0B634F73CC4EC71BDA02D6C1 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		A7E000000000000000000006 /* SwiftTerm-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SwiftTerm-LICENSE.txt; sourceTree = "<group>"; };
+		72BF66873176421CA4710700 /* Sparkle-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Sparkle-LICENSE.txt; sourceTree = "<group>"; };
+		3890AB96ED2A106FA5798B75 /* SightportApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SightportApp.swift; sourceTree = "<group>"; };
+		79488D99B821B22DD468F49E /* Workspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Workspace.swift; sourceTree = "<group>"; };
+		7EEFABEE46059E2780C687E4 /* WorkbenchRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchRecord.swift; sourceTree = "<group>"; };
+		6A6F3A9F67AE49B096DCCE10 /* ClusterResourceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClusterResourceViews.swift; sourceTree = "<group>"; };
+		92B766AAC0CDB8DBBA175C36 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F2BF0DDE969741CE81992899 /* ArgoDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArgoDashboardView.swift; sourceTree = "<group>"; };
+		B7439FEE8EB74957813ED93B /* PortForwardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortForwardingView.swift; sourceTree = "<group>"; };
+		0FEB00F35735466788FA7A8C /* PodTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodTerminalView.swift; sourceTree = "<group>"; };
+		876E7836B8BB48DDBAAB99FC /* PodLogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodLogsView.swift; sourceTree = "<group>"; };
+		ADA1E6AC020947B78C74D69F /* PodsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodsView.swift; sourceTree = "<group>"; };
+		A7E000000000000000000004 /* PodTerminalSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodTerminalSurface.swift; sourceTree = "<group>"; };
+		9FDB26629AF054472E4ABC6C /* WorkbenchTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchTable.swift; sourceTree = "<group>"; };
+		AADBB74B21B072F2393F28EF /* SightportMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SightportMark.swift; sourceTree = "<group>"; };
+		BF5DEE9D63689E476699FDE6 /* Sightport.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sightport.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C39999ACA3F18E584E593087 /* Style.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Style.swift; sourceTree = "<group>"; };
+		CD81C20214A7245C986CFF98 /* WorkbenchInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchInspector.swift; sourceTree = "<group>"; };
+		EBFE34A5AB8FE46A92D2CABE /* sightport */ = {isa = PBXFileReference; lastKnownFileType = folder; name = sightport; path = .; sourceTree = SOURCE_ROOT; };
+		F8288046A7FE448CC6D132EF /* WorkbenchNavigator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchNavigator.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D77B7C26A3B6AC8331BC701B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1C3704113FE60A04322C8198 /* SightportCore in Frameworks */,
+				A7E000000000000000000001 /* SwiftTerm in Frameworks */,
+				EACE00000000000000000001 /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0BD0B77E4373E0A7E27FC078 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				EBFE34A5AB8FE46A92D2CABE /* sightport */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		4A7F12C9A8C2F1CF6E7B2396 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				BF5DEE9D63689E476699FDE6 /* Sightport.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		6E4E4674BAC5D4BE1F21AA01 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				A11DB28AE30006FAFE6D7461 /* Sightport */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		A11DB28AE30006FAFE6D7461 /* Sightport */ = {
+			isa = PBXGroup;
+			children = (
+				CD81C20214A7245C986CFF98 /* WorkbenchInspector.swift */,
+				6A6F3A9F67AE49B096DCCE10 /* ClusterResourceViews.swift */,
+				92B766AAC0CDB8DBBA175C36 /* ContentView.swift */,
+				F2BF0DDE969741CE81992899 /* ArgoDashboardView.swift */,
+				B7439FEE8EB74957813ED93B /* PortForwardingView.swift */,
+				0FEB00F35735466788FA7A8C /* PodTerminalView.swift */,
+				876E7836B8BB48DDBAAB99FC /* PodLogsView.swift */,
+				ADA1E6AC020947B78C74D69F /* PodsView.swift */,
+				A7E000000000000000000004 /* PodTerminalSurface.swift */,
+				9FDB26629AF054472E4ABC6C /* WorkbenchTable.swift */,
+				7EEFABEE46059E2780C687E4 /* WorkbenchRecord.swift */,
+				F8288046A7FE448CC6D132EF /* WorkbenchNavigator.swift */,
+				3890AB96ED2A106FA5798B75 /* SightportApp.swift */,
+				AADBB74B21B072F2393F28EF /* SightportMark.swift */,
+				C39999ACA3F18E584E593087 /* Style.swift */,
+				79488D99B821B22DD468F49E /* Workspace.swift */,
+			);
+			path = Sightport;
+			sourceTree = "<group>";
+		};
+		DD3023767FDBB4D4AD9AE546 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				0B634F73CC4EC71BDA02D6C1 /* AppIcon.icns */,
+				A7E000000000000000000006 /* SwiftTerm-LICENSE.txt */,
+				72BF66873176421CA4710700 /* Sparkle-LICENSE.txt */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		FDB8005605FDA69EE9BCAD6B = {
+			isa = PBXGroup;
+			children = (
+				0BD0B77E4373E0A7E27FC078 /* Packages */,
+				DD3023767FDBB4D4AD9AE546 /* Resources */,
+				6E4E4674BAC5D4BE1F21AA01 /* Sources */,
+				4A7F12C9A8C2F1CF6E7B2396 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F4D6B1B12C327EF79EA7F077 /* Sightport */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6FD11861B14B4C824FA39250 /* Build configuration list for PBXNativeTarget "Sightport" */;
+			buildPhases = (
+				0D0AF6DF8E5FC69D9FF1F627 /* Sources */,
+				D49C9CFF53014F5809F022CB /* Resources */,
+				D77B7C26A3B6AC8331BC701B /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Sightport;
+			packageProductDependencies = (
+				0CE8D03C4FB5ABD2410A4ECB /* SightportCore */,
+				A7E000000000000000000002 /* SwiftTerm */,
+				EACE00000000000000000002 /* Sparkle */,
+			);
+			productName = Sightport;
+			productReference = BF5DEE9D63689E476699FDE6 /* Sightport.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		EFC195EBB23B5DB3B68A4436 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					F4D6B1B12C327EF79EA7F077 = {
+						ProvisioningStyle = Manual;
+					};
+				};
+			};
+			buildConfigurationList = 60D738A4950543B5B9B6DF8E /* Build configuration list for PBXProject "Sightport" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = FDB8005605FDA69EE9BCAD6B;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				36664330BB44FFF1D527E838 /* XCLocalSwiftPackageReference "." */,
+				A7E000000000000000000003 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				EACE00000000000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F4D6B1B12C327EF79EA7F077 /* Sightport */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D49C9CFF53014F5809F022CB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DB24F90A1036197A535AD1EF /* AppIcon.icns in Resources */,
+				A7E000000000000000000007 /* SwiftTerm-LICENSE.txt in Resources */,
+				72BF66873176421CA4710701 /* Sparkle-LICENSE.txt in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0D0AF6DF8E5FC69D9FF1F627 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				13435A9B5E8CA14C22121C15 /* WorkbenchInspector.swift in Sources */,
+				A7466793D34D40FCA61576A1 /* ClusterResourceViews.swift in Sources */,
+				CBE61CB8C9A924ECD06413B7 /* ContentView.swift in Sources */,
+				EF2A3A93725042CC8362A4C1 /* ArgoDashboardView.swift in Sources */,
+				B7439FEE8EB74957813ED93A /* PortForwardingView.swift in Sources */,
+				6C927B3ADCA14DBE9FF97A1A /* PodTerminalView.swift in Sources */,
+				1907F477588447608DB57890 /* PodLogsView.swift in Sources */,
+				71B5D843883842C8A7C54BCF /* PodsView.swift in Sources */,
+				A7E000000000000000000005 /* PodTerminalSurface.swift in Sources */,
+				E29C0C9B4CF2F30008B3E655 /* WorkbenchTable.swift in Sources */,
+				02CF320A10A94EBE453F5E6E /* WorkbenchRecord.swift in Sources */,
+				30B3140C6B2614B700F71D55 /* WorkbenchNavigator.swift in Sources */,
+				4F8D0538079340C631AA6054 /* SightportApp.swift in Sources */,
+				8AEED39F8A386108E3B53F57 /* SightportMark.swift in Sources */,
+				CC8BD1B6A4659B4EB9EFC518 /* Style.swift in Sources */,
+				94DE3F6DF8405DD038DD498F /* Workspace.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		63DEAFFA8B0D85F744AAB554 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		6E9494AEA9AAABAFE9D963FF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		B9F9C30D32E531A08BF95B4E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 4;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.sightport.mac;
+				SIGHTPORT_UPDATE_FEED_URL = "https://github.com/nicholaspearson/sightport/releases/latest/download/appcast.xml";
+				SIGHTPORT_UPDATE_PUBLIC_KEY = "SBN8+q6wqpwW65v0Cj0eDU3KrIxQ+KlMM20oKmi+17U=";
+				PRODUCT_NAME = Sightport;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		DF0C12472EBF9752070A0152 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 4;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.sightport.mac;
+				SIGHTPORT_UPDATE_FEED_URL = "https://github.com/nicholaspearson/sightport/releases/latest/download/appcast.xml";
+				SIGHTPORT_UPDATE_PUBLIC_KEY = "SBN8+q6wqpwW65v0Cj0eDU3KrIxQ+KlMM20oKmi+17U=";
+				PRODUCT_NAME = Sightport;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		60D738A4950543B5B9B6DF8E /* Build configuration list for PBXProject "Sightport" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				63DEAFFA8B0D85F744AAB554 /* Debug */,
+				6E9494AEA9AAABAFE9D963FF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6FD11861B14B4C824FA39250 /* Build configuration list for PBXNativeTarget "Sightport" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DF0C12472EBF9752070A0152 /* Debug */,
+				B9F9C30D32E531A08BF95B4E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		36664330BB44FFF1D527E838 /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		EACE00000000000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.10.1;
+			};
+		};
+		A7E000000000000000000003 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.5.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		EACE00000000000000000002 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EACE00000000000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+		A7E000000000000000000002 /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A7E000000000000000000003 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+		0CE8D03C4FB5ABD2410A4ECB /* SightportCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SightportCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = EFC195EBB23B5DB3B68A4436 /* Project object */;
+}
