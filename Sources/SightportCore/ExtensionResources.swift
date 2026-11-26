@@ -91,10 +91,7 @@ public enum HelmReleases {
 extension KubernetesClient {
     public func customResources(_ type: CustomResourceType, in file: URL, context: String,
                                 namespace: String?) async throws -> [ResourceRow] {
-        let target = ResourceWatchTarget.custom(type)
-        let args = try target.arguments(context: context, namespace: namespace) + ["-o", "go-template=" + target.listTemplate]
-        let data = try await run(args, file: file, operation: .customResources(type.resourceName, type.isNamespaced ? namespace : nil))
-        return try ResourceRow.decodeList(data, columnCount: CustomResourceType.columns.count)
+        try await listResourceRows(.custom(type), in: file, context: context, namespace: namespace)
     }
 
     public func helmReleases(in file: URL, context: String, namespace: String?) async throws -> [ResourceRow] {

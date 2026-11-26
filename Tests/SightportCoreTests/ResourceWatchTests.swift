@@ -45,6 +45,30 @@ final class ResourceWatchTests: XCTestCase {
         XCTAssertEqual(updated.map(\.namespace), ["blue", "green"])
     }
 
+    func testLargeWatchSnapshotDecodesEveryFrameIncludingSplitFields() async throws {
+        let fixture = try WatchFixture(script: #"""
+            /usr/bin/awk 'BEGIN {
+                for (i = 0; i < 1090; i++) {
+                    printf "ADDED\037uid-%d\037worker-%d\037blue\037\0371\0372\0373\n", i, i
+                }
+            }'
+            printf 'MODIFIED\037uid-0\037worker-0\037blue\037\0373'
+            /bin/sleep 0.02
+            printf '\0373\0373\nSYNC\n'
+            """#)
+        defer { fixture.remove() }
+        let log = WatchSnapshots()
+        try await fixture.client.watchResources(.resource(.deployments), in: fixture.config, context: "selected") {
+            await log.add($0)
+        }
+        let frames = await log.frames
+        XCTAssertEqual(frames.count, 1)
+        let rows = try XCTUnwrap(frames.first)
+        XCTAssertEqual(rows.map(\.id), (0..<1090).map { "uid-\($0)" })
+        XCTAssertEqual(rows.first?.values, ["3", "3", "3"])
+        XCTAssertEqual(rows.last?.values, ["1", "2", "3"])
+    }
+
     func testInitialListAndSubsequentDeletionShareOneStreamAndCancellationReapsClient() async throws {
         let fixture = try WatchFixture(script: #"""
             case " $* " in

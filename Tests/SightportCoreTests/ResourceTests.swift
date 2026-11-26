@@ -18,6 +18,7 @@ final class ResourceTests: XCTestCase {
         #!/bin/sh
         printf '%s\\n' "$@" > "$FIXTURE/args"
         if [ -f "$FIXTURE/error" ]; then
+          /bin/cat "$FIXTURE/output"
           /bin/cat "$FIXTURE/error" >&2
           exit 1
         fi
@@ -150,6 +151,19 @@ final class ResourceTests: XCTestCase {
         XCTAssertThrowsError(try ResourceRow.decodeList(Data("bad\trow\n".utf8), kind: .namespaces))
     }
 
+    func testListOnlyAcceptsLargeCollectionsAndAnUnterminatedLastRow() async throws {
+        let message = String(repeating: "x", count: 1024)
+        let output = (0..<4096).map {
+            "uid-\($0)\tevent-\($0)\tblue\t\tNormal\tStarted\tPod/api\t\(message)\t\t1\tkubelet"
+        }.joined(separator: "\n")
+        XCTAssertGreaterThan(output.utf8.count, 4 * 1024 * 1024)
+        try Data(output.utf8).write(to: directory.appendingPathComponent("output"))
+        let rows = try await client.resources(.events, in: config, context: "selected", namespace: "blue")
+        XCTAssertEqual(rows.count, 4096)
+        XCTAssertEqual(rows.last?.id, "uid-4095")
+        XCTAssertEqual(rows.last?.values[3], message)
+    }
+
     func testSecretAndConfigMapProjectionsReturnOnlyTypesAndCounts() {
         XCTAssertTrue(ResourceKind.secrets.listTemplate.contains("{{with .data}}{{len .}}{{else}}0{{end}}"))
         for kind in [ResourceKind.secrets, .configMaps] {
@@ -163,6 +177,7 @@ final class ResourceTests: XCTestCase {
 
     func testResourceErrorsKeepScopeAndOmitPluginOutput() async throws {
         let errorFile = directory.appendingPathComponent("error")
+        try Data("partial response\n".utf8).write(to: directory.appendingPathComponent("output"))
         try "Error from server (Forbidden): sensitive-helper-message".write(to: errorFile, atomically: true, encoding: .utf8)
         do {
             _ = try await client.resources(.pods, in: config, context: "limited", namespace: "blue")

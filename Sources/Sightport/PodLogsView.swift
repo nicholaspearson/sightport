@@ -34,7 +34,7 @@ struct PodLogsView: View {
     }
 
     var body: some View {
-        let restartCount = previous ? workspace.rows.first(where: { $0.id == target.podID })?.pod?
+        let restartCount = previous ? workspace.resourceRow(id: target.podID)?.pod?
             .containers.first(where: { $0.name == container })?.restartCount : nil
         let request = Request(container: container, previous: previous, refreshNumber: refreshNumber, restartCount: restartCount)
         let active = isVisible && workspace.windowVisible

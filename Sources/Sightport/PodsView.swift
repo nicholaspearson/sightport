@@ -29,12 +29,12 @@ private func copyPodNames(_ rows: [ResourceRow]) -> Bool {
 }
 
 struct PodSelectionControls: View {
-    let rows: [ResourceRow]
+    let items: [PodTableItem]
+    let visible: Set<String>
     @Binding var checked: Set<String>
 
     var body: some View {
-        let visible = Set(rows.map(\.id))
-        let count = checked.intersection(visible).count
+        let count = checked.count
         let all = count > 0 && count == visible.count
         HStack(spacing: 4) {
             Button {
@@ -44,12 +44,12 @@ struct PodSelectionControls: View {
                     .font(.system(size: 14))
                     .foregroundStyle(count == 0 ? Palette.muted : Palette.forest)
             }
-            .buttonStyle(.plain).disabled(rows.isEmpty)
+            .buttonStyle(.plain).disabled(items.isEmpty)
             .help(all ? "Clear checked pods" : "Check all visible pods")
             .accessibilityLabel(all ? "Clear checked pods" : "Check all visible pods")
             if count > 0 {
                 Button {
-                    copyPodNames(rows.filter { checked.contains($0.id) })
+                    copyPodNames(items.filter { checked.contains($0.id) }.map(\.row))
                 } label: {
                     Label(String(count), systemImage: "doc.on.doc")
                 }
@@ -59,11 +59,10 @@ struct PodSelectionControls: View {
             }
         }
         .fixedSize()
-        .onChange(of: visible) { _, ids in checked.formIntersection(ids) }
     }
 }
 
-private struct PodTableItem: Identifiable {
+struct PodTableItem: Identifiable, Equatable, Sendable {
     let row: ResourceRow
     let usage: PodUsage?
     var id: String { row.id }
@@ -83,19 +82,21 @@ private struct PodTableItem: Identifiable {
 
 struct PodsTable: View {
     @ObservedObject var workspace: Workspace
-    let rows: [ResourceRow]
+    let items: [PodTableItem]
+    let dataID: UUID?
+    let scrollID: AnyHashable
     @Binding var checked: Set<String>
-    @State private var sort = [KeyPathComparator(\PodTableItem.age), KeyPathComparator(\PodTableItem.name)]
+    @Binding var sort: [KeyPathComparator<PodTableItem>]
+
+    private struct CellAppearance: Hashable {
+        let checked: Set<String>
+        let metricsMessage: String
+    }
 
     var body: some View {
-        let workspace = self.workspace
         let context = workspace.connectedContext
         let scope = workspace.namespaceFilter
-        let metrics = workspace.podMetrics
-        let items = rows.map { row in
-            PodTableItem(row: row, usage: row.namespace.flatMap { metrics[PodKey(namespace: $0, name: row.name)] })
-        }.sorted(using: sort)
-        let selected = Binding<String?>(get: {
+        let selection = Binding<String?>(get: {
             if case .resource(let id) = workspace.selection { return id }
             return nil
         }, set: { id in
@@ -104,134 +105,86 @@ struct PodsTable: View {
             let item = id.map(WorkbenchItem.resource)
             if workspace.selection != item { workspace.select(item) }
         })
-        return Table(items, selection: selected, sortOrder: $sort) {
-            identityColumns
-            usageColumns
-            relationshipsColumns
-            statusColumns
-        }
-        .tableStyle(.inset(alternatesRowBackgrounds: false))
-        .scrollContentBackground(.hidden)
-        .background(Palette.canvas)
-        .contextMenu(forSelectionType: String.self) { ids in
-            if let row = rows.first(where: { ids.contains($0.id) }) {
-                PodActions(workspace: workspace, row: row)
-            }
-        } primaryAction: { ids in
-            if let row = rows.first(where: { ids.contains($0.id) }) { workspace.inspectPod(row) }
-        }
+        let appearance = CellAppearance(checked: checked, metricsMessage: metricsMessage)
+        return LiveResourceTable(items: items, dataID: AnyHashable(dataID), visualID: AnyHashable(appearance),
+                                 scrollID: scrollID, columns: columns, selection: selection, sortOrder: $sort,
+                                 menu: { actions(for: $0.row) }, doubleClick: { workspace.inspectPod($0.row) })
     }
 
-    @TableColumnBuilder<PodTableItem, KeyPathComparator<PodTableItem>>
-    private var identityColumns: some TableColumnContent<PodTableItem, KeyPathComparator<PodTableItem>> {
-        let workspace = self.workspace
-        TableColumn("") { item in
-            Toggle("Check " + item.name, isOn: Binding(get: { checked.contains(item.id) }, set: { enabled in
-                if enabled { checked.insert(item.id) } else { checked.remove(item.id) }
-            }))
-            .toggleStyle(.checkbox).labelsHidden().controlSize(.small)
-        }.width(22)
-        TableColumn("Name", value: \.name) { ResourceNameCell(name: $0.name) }
-            .width(min: 155, ideal: 250)
-        TableColumn(Text(Image(systemName: "exclamationmark.triangle")),
-                    sortUsing: KeyPathComparator(\PodTableItem.warning)) { item in
-            if !item.warning.isEmpty {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    .help(item.warning).accessibilityLabel(item.warning)
-            }
-        }.width(31)
-        TableColumn("Namespace", value: \.namespace) { item in
-            PodLink(value: item.namespace, action: { workspace.showNamespace(of: item.row) })
-        }.width(min: 85, ideal: 112)
-    }
-
-    @TableColumnBuilder<PodTableItem, KeyPathComparator<PodTableItem>>
-    private var usageColumns: some TableColumnContent<PodTableItem, KeyPathComparator<PodTableItem>> {
+    private var columns: [LiveColumn<PodTableItem>] {
+        typealias Column = LiveColumn<PodTableItem>
         let missing = metricsMessage
-        TableColumn("CPU", value: \.cpu) { item in
-            UsageCell(text: item.usage?.cpuText, missing: missing)
-        }.width(min: 50, ideal: 65)
-        TableColumn("Memory", value: \.memory) { item in
-            UsageCell(text: item.usage?.memoryText, missing: missing)
-        }.width(min: 66, ideal: 79)
+        return [
+            Column(id: "checked", title: "", width: 30, minWidth: 30) { item in
+                .check(checked.contains(item.id), help: "Check " + item.name) {
+                    if checked.remove(item.id) == nil { checked.insert(item.id) }
+                }
+            },
+            Column(id: "name", title: "Name", width: 250, minWidth: 155, sort: KeyPathComparator(\.name)) {
+                .text($0.name, color: NSColor(Palette.ink), bold: true, help: $0.name)
+            },
+            Column(id: "warning", title: "⚠", width: 32, minWidth: 32, sort: KeyPathComparator(\.warning)) {
+                $0.warning.isEmpty ? .empty : .symbol("exclamationmark.triangle.fill", color: .systemOrange, help: $0.warning)
+            },
+            Column(id: "namespace", title: "Namespace", width: 112, minWidth: 85, sort: KeyPathComparator(\.namespace)) { item in
+                item.namespace.isEmpty ? .resourceValue("") : .link(item.namespace) { workspace.showNamespace(of: item.row) }
+            },
+            Column(id: "cpu", title: "CPU", width: 65, minWidth: 50, sort: KeyPathComparator(\.cpu)) { item in
+                let value = item.usage?.cpuText
+                return .text(value ?? "—", color: NSColor(Palette.muted), help: value ?? missing)
+            },
+            Column(id: "memory", title: "Memory", width: 79, minWidth: 66, sort: KeyPathComparator(\.memory)) { item in
+                let value = item.usage?.memoryText
+                return .text(value ?? "—", color: NSColor(Palette.muted), help: value ?? missing)
+            },
+            Column(id: "containers", title: "Containers", width: 90, minWidth: 73, sort: KeyPathComparator(\.containerCount)) { item in
+                guard let containers = item.row.pod?.containers, !containers.isEmpty else { return .resourceValue("") }
+                return .indicators(containers.prefix(5).map { NSColor($0.color) }, extra: max(0, containers.count - 5),
+                                   help: containers.map(\.summary).joined(separator: "\n"))
+            },
+            Column(id: "restarts", title: "Restarts", width: 66, minWidth: 58, sort: KeyPathComparator(\.restarts)) {
+                .resourceValue(String($0.restarts))
+            },
+            Column(id: "owner", title: "Controlled By", width: 105, minWidth: 92, sort: KeyPathComparator(\.controller)) { item in
+                guard workspace.podOwnerKind(item.row) != nil else { return .resourceValue(item.controller) }
+                let help = [item.row.pod?.controllerKind, item.row.pod?.controllerName].compactMap { $0 }.joined(separator: "/")
+                return .link(item.controller, help: help) { workspace.showPodOwner(item.row) }
+            },
+            Column(id: "node", title: "Node", width: 100, minWidth: 73, sort: KeyPathComparator(\.node)) { item in
+                item.node.isEmpty ? .resourceValue("") : .link(item.node) { workspace.showPodNode(item.row) }
+            },
+            Column(id: "qos", title: "QoS", width: 94, minWidth: 76, sort: KeyPathComparator(\.qos)) { .resourceValue($0.qos) },
+            Column(id: "status", title: "Status", width: 122, minWidth: 85, sort: KeyPathComparator(\.status)) { item in
+                .text(item.row.pod?.status ?? "—", color: NSColor(item.row.pod?.statusColor ?? Palette.muted),
+                      bold: true, help: item.row.pod?.warning ?? item.row.pod?.status)
+            },
+            Column(id: "age", title: "Age", width: 60, minWidth: 45, sort: KeyPathComparator(\.age)) { .age($0.row.createdAt) },
+            Column(id: "actions", title: "", width: 32, minWidth: 32) { .menu(help: "Actions for " + $0.name) }
+        ]
     }
 
-    @TableColumnBuilder<PodTableItem, KeyPathComparator<PodTableItem>>
-    private var relationshipsColumns: some TableColumnContent<PodTableItem, KeyPathComparator<PodTableItem>> {
-        let workspace = self.workspace
-        TableColumn("Containers", value: \.containerCount) { item in
-            ContainerIndicators(containers: item.row.pod?.containers ?? [])
-        }.width(min: 73, ideal: 90)
-        TableColumn("Restarts", value: \.restarts) { item in
-            ResourceCell(value: String(item.restarts)).monospacedDigit()
-        }.width(min: 58, ideal: 66)
-        TableColumn("Controlled By", value: \.controller) { item in
-            if workspace.podOwnerKind(item.row) != nil {
-                PodLink(value: item.controller, action: { workspace.showPodOwner(item.row) })
-                    .help([item.row.pod?.controllerKind, item.row.pod?.controllerName].compactMap { $0 }.joined(separator: "/"))
-            } else {
-                ResourceCell(value: item.controller).help(item.row.pod?.controllerName ?? "")
-            }
-        }.width(min: 92, ideal: 105)
-        TableColumn("Node", value: \.node) { item in
-            PodLink(value: item.node, action: { workspace.showPodNode(item.row) })
-        }.width(min: 73, ideal: 100)
-    }
-
-    @TableColumnBuilder<PodTableItem, KeyPathComparator<PodTableItem>>
-    private var statusColumns: some TableColumnContent<PodTableItem, KeyPathComparator<PodTableItem>> {
-        let workspace = self.workspace
-        TableColumn("QoS", value: \.qos) { ResourceCell(value: $0.qos) }
-            .width(min: 76, ideal: 94)
-        TableColumn("Status", value: \.status) { item in
-            PodStatus(pod: item.row.pod)
-        }.width(min: 85, ideal: 122)
-        TableColumn("Age", value: \.age) { item in
-            ResourceCell(ageSince: item.row.createdAt)
-        }.width(min: 45, ideal: 60)
-        TableColumn("") { item in
-            Menu {
-                PodActions(workspace: workspace, row: item.row)
-            } label: {
-                Image(systemName: "ellipsis").frame(width: 22, height: 22)
-            }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden)
-            .fixedSize().help("Actions for " + item.name).accessibilityLabel("Actions for " + item.name)
-        }.width(28)
+    private func actions(for displayed: ResourceRow) -> NSMenu? {
+        guard let row = workspace.resourceRow(id: displayed.id) else { return nil }
+        let menu = NSMenu()
+        menu.addAction("Inspect pod") { workspace.inspectPod(row) }
+        menu.addAction("View logs…", enabled: row.namespace != nil && row.pod?.containers.isEmpty == false) {
+            workspace.openPodLogs(row)
+        }
+        menu.addAction("Open terminal…", enabled: !row.runningContainerNames.isEmpty) { workspace.openPodTerminal(row) }
+        menu.addAction("Copy namespace/name") { copyPodNames([row]) }
+        menu.addItem(.separator())
+        if row.namespace != nil { menu.addAction("Show namespace") { workspace.showNamespace(of: row) } }
+        if workspace.podOwnerKind(row) != nil { menu.addAction("Show controller") { workspace.showPodOwner(row) } }
+        if row.pod?.node != nil { menu.addAction("Show node") { workspace.showPodNode(row) } }
+        menu.addItem(.separator())
+        menu.addAction(workspace.isTerminatingPod(row) ? "Termination requested" : "Terminate Pod…",
+                       enabled: workspace.canTerminatePod(row)) { workspace.requestPodTermination(row) }
+        return menu
     }
 
     private var metricsMessage: String {
         if workspace.podMetricsLoading { return "Loading pod metrics…" }
         return workspace.podMetricsError ?? "No usage sample for this pod."
-    }
-}
-
-private struct PodActions: View {
-    @ObservedObject var workspace: Workspace
-    let row: ResourceRow
-
-    var body: some View {
-        Button("Inspect pod") { workspace.inspectPod(row) }
-        Button("View logs…") { workspace.openPodLogs(row) }
-            .disabled(row.namespace == nil || row.pod?.containers.isEmpty != false)
-        Button("Open terminal…") { workspace.openPodTerminal(row) }
-            .disabled(row.runningContainerNames.isEmpty)
-        Button("Copy namespace/name") { copyPodNames([row]) }
-        Divider()
-        if row.namespace != nil {
-            Button("Show namespace") { workspace.showNamespace(of: row) }
-        }
-        if workspace.podOwnerKind(row) != nil {
-            Button("Show controller") { workspace.showPodOwner(row) }
-        }
-        if row.pod?.node != nil {
-            Button("Show node") { workspace.showPodNode(row) }
-        }
-        Divider()
-        Button(workspace.isTerminatingPod(row) ? "Termination requested" : "Terminate Pod…", role: .destructive) {
-            workspace.requestPodTermination(row)
-        }
-        .disabled(!workspace.canTerminatePod(row))
     }
 }
 
@@ -259,15 +212,6 @@ private extension PodUsage {
     var memoryText: String {
         let mib = Double(memoryBytes) / (1024 * 1024)
         return mib.formatted(.number.precision(.fractionLength(0...1))) + " MiB"
-    }
-}
-
-private struct UsageCell: View {
-    let text: String?
-    let missing: String
-    var body: some View {
-        Text(verbatim: text ?? "—").font(.system(size: 11.5)).monospacedDigit()
-            .foregroundStyle(Palette.muted).lineLimit(1).help(text ?? missing)
     }
 }
 
@@ -302,38 +246,6 @@ private extension PodContainer {
 
     var summary: String {
         "\(name) (\(roleText)) · \(stateText) · \(restartCount) " + (restartCount == 1 ? "restart" : "restarts")
-    }
-}
-
-private struct ContainerIndicators: View {
-    let containers: [PodContainer]
-    var body: some View {
-        if containers.isEmpty {
-            ResourceCell(value: "")
-        } else {
-            HStack(spacing: 3) {
-                ForEach(containers.prefix(5), id: \.name) { container in
-                    RoundedRectangle(cornerRadius: 1).fill(container.color)
-                        .frame(width: 7, height: 7).help(container.summary)
-                }
-                if containers.count > 5 {
-                    Text("+\(containers.count - 5)").font(.system(size: 9))
-                }
-            }
-            .help(containers.map(\.summary).joined(separator: "\n"))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(containers.map(\.summary).joined(separator: ", "))
-        }
-    }
-}
-
-private struct PodStatus: View {
-    let pod: PodDetails?
-
-    var body: some View {
-        Text(verbatim: pod?.status ?? "—")
-            .font(.system(size: 11.5, weight: .medium)).foregroundStyle(pod?.statusColor ?? Palette.muted)
-            .lineLimit(1).truncationMode(.tail).help(pod?.warning ?? pod?.status ?? "")
     }
 }
 

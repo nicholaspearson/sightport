@@ -7,6 +7,9 @@ struct ClusterResourceTable: View {
     @State private var query = ""
     @State private var checkedPods: Set<String> = []
     @State private var sort: [KeyPathComparator<ResourceRow>]
+    @State private var podSort = [KeyPathComparator(\PodTableItem.age), KeyPathComparator(\PodTableItem.name)]
+    @State private var presentation: ResourceTablePresentation?
+    @State private var updates: AsyncStream<Void>.Continuation?
     @FocusState private var searchFocused: Bool
 
     init(workspace: Workspace, section: ClusterSection) {
@@ -26,28 +29,58 @@ struct ClusterResourceTable: View {
     }
 
     var body: some View {
+        let options = ResourceTableOptions(
+            section: section, context: workspace.connectedContext,
+            namespace: section.isNamespaced ? workspace.namespaceFilter : nil,
+            query: query.trimmingCharacters(in: .whitespacesAndNewlines), sort: sort, podSort: podSort
+        )
+        let revision = TableDataRevision(rows: workspace.rowsRevision, metrics: kind == .pods ? workspace.podMetricsRevision : 0)
+        let current = presentation.flatMap {
+            !workspace.rows.isEmpty && $0.options.showsSameResources(as: options) ? $0 : nil
+        }
         GeometryReader { area in
-            resourceList(compact: (kind == .pods || workspace.page.configDataKind != nil) && area.size.width < 425)
+            resourceList(compact: (kind == .pods || workspace.page.configDataKind != nil) && area.size.width < 425,
+                         data: current, filter: options.query)
+        }
+        .onChange(of: revision) { updates?.yield() }
+        .task(id: options) {
+            guard section != .overview else { return }
+            let (stream, signal) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            updates = signal
+            defer { signal.finish() }
+            signal.yield()
+            // Finish one snapshot at a time. When watches outpace the sort, the next
+            // iteration reads the latest data without starving the visible table.
+            for await _ in stream {
+                guard !Task.isCancelled else { return }
+                if workspace.rows.isEmpty {
+                    presentation = nil
+                    checkedPods.removeAll()
+                    continue
+                }
+                guard let result = await options.prepare(rows: workspace.rows, metrics: workspace.podMetrics),
+                      !Task.isCancelled, workspace.connectedContext == options.context, workspace.page == .cluster(section),
+                      !section.isNamespaced || workspace.namespaceFilter == options.namespace else { return }
+                presentation = result
+                if !checkedPods.isEmpty { checkedPods.formIntersection(result.visiblePodIDs) }
+                if !options.query.isEmpty, case .resource(let id) = workspace.selection,
+                   let row = workspace.resourceRow(id: id), !row.matches(options.query) {
+                    workspace.select(nil)
+                }
+            }
         }
     }
 
-    private func resourceList(compact: Bool) -> some View {
-        let filter = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let matches = workspace.rows.filter { row in
-            filter.isEmpty || row.name.localizedCaseInsensitiveContains(filter)
-                || row.namespace?.localizedCaseInsensitiveContains(filter) == true
-                || row.values.contains { $0.localizedCaseInsensitiveContains(filter) }
-                || row.pod?.matches(filter) == true
-        }
-        let rows = kind == .pods ? matches : matches.sorted(using: sort)
-        let kinds = ResourceKind.workloads.filter { filter.isEmpty || $0.title.localizedCaseInsensitiveContains(filter) }
+    private func resourceList(compact: Bool, data: ResourceTablePresentation?, filter: String) -> some View {
+        let count = data?.count ?? 0
+        let preparing = data == nil && !workspace.rows.isEmpty
 
         return VStack(spacing: 0) {
             let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
                                  : AnyLayout(HStackLayout(spacing: 9))
             layout {
                 HStack(spacing: compact ? 5 : 9) {
-                    scopeControls(rows: rows, compact: compact)
+                    scopeControls(data: data, compact: compact)
                     if compact {
                         Spacer(minLength: 0)
                         refreshButton
@@ -55,12 +88,12 @@ struct ClusterResourceTable: View {
                 }
                 HStack(spacing: compact ? 5 : 9) {
                     searchBox
-                    if section != .overview, !workspace.resourceLoading, workspace.resourceError == nil {
-                        Text("\(rows.count) " + (rows.count == 1 ? "item" : "items"))
+                    if section != .overview, !workspace.resourceLoading, !preparing, workspace.resourceError == nil {
+                        Text("\(count) " + (count == 1 ? "item" : "items"))
                             .font(.system(size: 10.5)).foregroundStyle(Palette.muted).fixedSize()
-                            .accessibilityLabel("\(rows.count) " + listTitle)
+                            .accessibilityLabel("\(count) " + listTitle)
                     }
-                    if kind == .pods, !rows.isEmpty, let message = workspace.podMetricsError {
+                    if kind == .pods, count > 0, let message = workspace.podMetricsError {
                         ViewThatFits(in: .horizontal) {
                             if !compact {
                                 Label("Metrics unavailable", systemImage: "gauge.with.dots.needle.0percent").fixedSize()
@@ -90,21 +123,22 @@ struct ClusterResourceTable: View {
             if section != .overview {
                 Group {
                     if section == .argoDashboard {
-                        if workspace.resourceLoading || workspace.resourceError != nil || rows.isEmpty {
+                        if workspace.resourceLoading || workspace.resourceError != nil || count == 0 {
                             Color.clear
                         } else {
-                            ArgoDashboardView(rows: rows, query: filter, openApplications: {
+                            ArgoDashboardView(rows: data?.rows ?? [], query: data?.options.query ?? filter, openApplications: {
                                 workspace.openCluster(.resources(.argoApplications))
                             }, inspect: workspace.inspectArgoApplication)
                         }
                     } else if kind == .pods {
-                        PodsTable(workspace: workspace, rows: rows, checked: $checkedPods)
+                        PodsTable(workspace: workspace, items: data?.pods ?? [], dataID: data?.id, scrollID: AnyHashable(data?.options),
+                                  checked: $checkedPods, sort: $podSort)
                     } else {
-                        resourceTable(rows: rows)
+                        resourceTable(data: data)
                     }
                 }
                     .overlay {
-                        if workspace.resourceLoading && rows.isEmpty {
+                        if (workspace.resourceLoading || preparing) && count == 0 {
                             ProgressView("Loading " + listTitle.lowercased() + "…").controlSize(.small)
                         } else if let error = workspace.resourceError {
                             VStack(spacing: 8) {
@@ -115,7 +149,7 @@ struct ClusterResourceTable: View {
                                 Button("Retry") { workspace.reloadResources() }.buttonStyle(.link)
                             }
                             .padding(16).frame(maxWidth: 420)
-                        } else if rows.isEmpty {
+                        } else if count == 0 {
                             VStack(spacing: 9) {
                                 emptyState(filtered: !filter.isEmpty, noun: listTitle.lowercased())
                                 if filter.isEmpty, let kind, ResourceKind.argoResources.contains(kind) || ResourceKind.argoSettings.contains(kind),
@@ -131,21 +165,19 @@ struct ClusterResourceTable: View {
                         }
                     }
             } else {
+                let kinds = ResourceKind.workloads.filter { filter.isEmpty || $0.title.localizedCaseInsensitiveContains(filter) }
                 overviewTable(kinds)
                     .overlay { if kinds.isEmpty { emptyState(filtered: true, noun: "workload types") } }
             }
         }
         .background(Palette.canvas)
-        .onChange(of: query) { _, _ in
-            if case .resource(let id) = workspace.selection, !rows.contains(where: { $0.id == id }) {
-                workspace.select(nil)
-            }
-        }
     }
 
     @ViewBuilder
-    private func scopeControls(rows: [ResourceRow], compact: Bool) -> some View {
-        if kind == .pods { PodSelectionControls(rows: rows, checked: $checkedPods) }
+    private func scopeControls(data: ResourceTablePresentation?, compact: Bool) -> some View {
+        if kind == .pods {
+            PodSelectionControls(items: data?.pods ?? [], visible: data?.visiblePodIDs ?? [], checked: $checkedPods)
+        }
         if section.isNamespaced {
             NamespaceSelector(workspace: workspace, compact: compact)
         } else {
@@ -173,88 +205,57 @@ struct ClusterResourceTable: View {
         IconAction(symbol: "arrow.clockwise", title: "Refresh resources") { workspace.reloadResources() }
     }
 
-    private func resourceTable(rows: [ResourceRow]) -> some View {
+    private func resourceTable(data: ResourceTablePresentation?) -> some View {
         let workspace = self.workspace
         let page = workspace.page
         let context = workspace.connectedContext
-        let columns = section.columns
-        let summaryIndices = columns.indices.filter { section != .helmReleases || columns[$0] != "Updated" }
+        let scope = workspace.namespaceFilter
         let selection = Binding<String?>(get: {
             if case .resource(let id) = workspace.selection { return id }
             return nil
         }, set: { id in
-            guard workspace.page == page, workspace.connectedContext == context else { return }
+            guard workspace.page == page, workspace.connectedContext == context,
+                  workspace.namespaceFilter == scope else { return }
             let item = id.map(WorkbenchItem.resource)
             if workspace.selection != item { workspace.select(item) }
         })
-        return Group {
-            if #available(macOS 14.4, *) {
-                Table(rows, selection: selection, sortOrder: $sort) {
-                    nameColumn
-                    if section.isNamespaced { namespaceColumn }
-                    TableColumnForEach(columns.indices, id: \.self) { index in
-                        detailColumn(columns[index], index: index)
-                    }
-                    if section != .helmReleases { ageColumn }
-                }
-            } else {
-                // Early Sonoma versions support a fixed Table column layout.
-                Table(rows, selection: selection, sortOrder: $sort) {
-                    nameColumn
-                    TableColumn(section.isNamespaced ? "Namespace" : "Scope") { row in
-                        ResourceCell(value: row.namespace ?? "Cluster")
-                    }.width(min: 62, ideal: 95)
-                    TableColumn("Details") { row in
-                        ResourceCell(value: summaryIndices.map { columns[$0] + ": " + row[field: $0] }.joined(separator: " · "))
-                    }.width(min: 110, ideal: 220)
-                    legacyDateColumn
-                }
+        return LiveResourceTable(items: data?.rows ?? [], dataID: AnyHashable(data?.id),
+                                 scrollID: AnyHashable(data?.options), columns: resourceColumns,
+                                 selection: selection, sortOrder: $sort, menu: { row in
+            let menu = NSMenu()
+            if kind == .namespaces {
+                menu.addAction("View pods in " + row.name) { showPods(in: row.name) }
+            } else if kind == .customResourceDefinitions, let type = CustomResourceType(definition: row) {
+                menu.addAction("View instances") { workspace.openCluster(.customResources(type)) }
             }
-        }
-        .tableStyle(.inset(alternatesRowBackgrounds: false))
-        .scrollContentBackground(.hidden)
-        .background(Palette.canvas)
-        .contextMenu(forSelectionType: String.self) { ids in
-            if kind == .namespaces, let row = rows.first(where: { ids.contains($0.id) }) {
-                Button("View pods in " + row.name) { showPods(in: row.name) }
-            } else if kind == .customResourceDefinitions, let row = rows.first(where: { ids.contains($0.id) }),
-                      let type = CustomResourceType(definition: row) {
-                Button("View instances") { workspace.openCluster(.customResources(type)) }
-            }
-        } primaryAction: { ids in
-            guard let row = rows.first(where: { ids.contains($0.id) }),
-                  workspace.page == page, workspace.connectedContext == context else { return }
+            return menu.items.isEmpty ? nil : menu
+        }, doubleClick: { row in
             if kind == .namespaces {
                 showPods(in: row.name)
             } else if kind == .customResourceDefinitions, let type = CustomResourceType(definition: row) {
                 workspace.openCluster(.customResources(type))
             }
+        })
+    }
+
+    private var resourceColumns: [LiveColumn<ResourceRow>] {
+        var columns = [LiveColumn<ResourceRow>(id: "name", title: "Name", width: 210, minWidth: 119,
+                                               sort: KeyPathComparator(\.name)) {
+            .text($0.name, color: NSColor(Palette.ink), bold: true, help: $0.name)
+        }]
+        if section.isNamespaced {
+            columns.append(LiveColumn(id: "namespace", title: "Namespace", width: 95, minWidth: 70,
+                                      sort: KeyPathComparator(\.namespaceText)) { .resourceValue($0.namespaceText) })
         }
-    }
-
-    private var nameColumn: TableColumn<ResourceRow, KeyPathComparator<ResourceRow>, ResourceNameCell, Text> {
-        TableColumn("Name", value: \.name) { ResourceNameCell(name: $0.name) }.width(min: 119, ideal: 210)
-    }
-
-    private var namespaceColumn: TableColumn<ResourceRow, KeyPathComparator<ResourceRow>, ResourceCell, Text> {
-        TableColumn("Namespace", value: \.namespaceText) { ResourceCell(value: $0.namespaceText) }
-            .width(min: 70, ideal: 95)
-    }
-
-    private var ageColumn: TableColumn<ResourceRow, KeyPathComparator<ResourceRow>, ResourceCell, Text> {
-        TableColumn("Age", value: \.ageSortValue) { ResourceCell(ageSince: $0.createdAt) }.width(min: 43, ideal: 55, max: 85)
-    }
-
-    private var legacyDateColumn: TableColumn<ResourceRow, KeyPathComparator<ResourceRow>, ResourceCell, Text> {
-        if section == .helmReleases, let index = section.columns.firstIndex(of: "Updated") {
-            return detailColumn("Updated", index: index)
+        for (index, title) in section.columns.enumerated() {
+            columns.append(LiveColumn(id: "detail-\(index)", title: title, width: 100, minWidth: 57,
+                                      sort: KeyPathComparator(\ResourceRow.[field: index])) { .resourceValue($0[field: index]) })
         }
-        return ageColumn
-    }
-
-    private func detailColumn(_ title: String, index: Int) -> TableColumn<ResourceRow, KeyPathComparator<ResourceRow>, ResourceCell, Text> {
-        TableColumn(title, value: \ResourceRow.[field: index]) { row in ResourceCell(value: row[field: index]) }
-            .width(min: 57, ideal: 100)
+        if section != .helmReleases {
+            columns.append(LiveColumn(id: "age", title: "Age", width: 55, minWidth: 43,
+                                      sort: KeyPathComparator(\.ageSortValue)) { .age($0.createdAt) })
+        }
+        return columns
     }
 
     private func showPods(in namespace: String) {
@@ -315,13 +316,83 @@ struct ClusterResourceTable: View {
     }
 }
 
-struct ResourceNameCell: View {
-    let name: String
-    var body: some View {
-        Text(verbatim: name).font(.system(size: 12, weight: .medium))
-            .lineLimit(1).truncationMode(.middle).help(name).frame(minHeight: 29)
-            .background(TableRowHover().accessibilityHidden(true))
+// A table projection depends on its data, search and sort. Selection, split-view layout
+// and other workspace changes reuse it without traversing the cluster on the main thread.
+private struct TableDataRevision: Equatable {
+    let rows: UInt64
+    let metrics: UInt64
+}
+
+private struct ResourceTableOptions: Hashable {
+    let section: ClusterSection
+    let context: ContextID?
+    let namespace: String?
+    let query: String
+    let sort: [KeyPathComparator<ResourceRow>]
+    let podSort: [KeyPathComparator<PodTableItem>]
+
+    func showsSameResources(as other: Self) -> Bool {
+        section == other.section && context == other.context && namespace == other.namespace
     }
+
+    func prepare(rows: [ResourceRow], metrics: [PodKey: PodUsage]) async -> ResourceTablePresentation? {
+        let matches = query.isEmpty ? rows : rows.filter { !Task.isCancelled && $0.matches(query) }
+        guard !Task.isCancelled else { return nil }
+        if section == .resources(.pods) {
+            let pods = matches.map { row in
+                PodTableItem(row: row, usage: row.namespace.flatMap { metrics[PodKey(namespace: $0, name: row.name)] })
+            }.sorted(using: podSort)
+            return ResourceTablePresentation(options: self, pods: pods, visiblePodIDs: Set(pods.map(\.id)))
+        }
+        return ResourceTablePresentation(options: self, rows: matches.sorted(using: sort))
+    }
+}
+
+private struct ResourceTablePresentation {
+    let id = UUID()
+    let options: ResourceTableOptions
+    var rows: [ResourceRow] = []
+    var pods: [PodTableItem] = []
+    var visiblePodIDs: Set<String> = []
+    var count: Int { rows.count + pods.count }
+}
+
+private extension ResourceRow {
+    func matches(_ query: String) -> Bool {
+        name.localizedCaseInsensitiveContains(query)
+            || namespace?.localizedCaseInsensitiveContains(query) == true
+            || values.contains { $0.localizedCaseInsensitiveContains(query) }
+            || pod?.matches(query) == true
+    }
+}
+
+extension LiveCell {
+    static func resourceValue(_ value: String) -> Self {
+        .text(value.isEmpty ? "—" : value, color: NSColor(Palette.muted), help: value)
+    }
+}
+
+extension NSMenu {
+    func addAction(_ title: String, enabled: Bool = true, perform: @escaping () -> Void) {
+        autoenablesItems = false
+        let item = ResourceMenuItem(title: title, perform: perform)
+        item.isEnabled = enabled
+        addItem(item)
+    }
+}
+
+private final class ResourceMenuItem: NSMenuItem {
+    private let perform: () -> Void
+
+    init(title: String, perform: @escaping () -> Void) {
+        self.perform = perform
+        super.init(title: title, action: #selector(activate), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("Resource menu items are constructed programmatically") }
+
+    @objc private func activate() { perform() }
 }
 
 struct ResourceCell: View {
@@ -343,7 +414,7 @@ struct ResourceCell: View {
 }
 
 // Each visible age label wakes only when its displayed unit changes.
-private struct ResourceAgeSchedule: TimelineSchedule {
+struct ResourceAgeSchedule: TimelineSchedule {
     let createdAt: Date
 
     static func unit(for seconds: Int) -> (duration: Int, suffix: String) {
@@ -465,7 +536,7 @@ struct ClusterResourceInspector: View {
 
     var body: some View {
         if case .cluster(let section) = workspace.page, case .resource(let id) = workspace.selection,
-           let row = workspace.rows.first(where: { $0.id == id }) {
+           let row = workspace.resourceRow(id: id) {
             resourceDetails(section, row: row)
         } else {
             let overview = workspace.page == .cluster(.overview)

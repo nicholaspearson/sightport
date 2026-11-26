@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,10 +16,10 @@ import (
 	"github.com/spf13/pflag"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/json"
 )
 
 type options struct {
@@ -116,10 +115,10 @@ func run(ctx context.Context, argv []string, in io.Reader, out io.Writer) error 
 			return err
 		}
 		var object map[string]any
-		if err := json.NewDecoder(in).Decode(&object); err != nil {
+		if err := json.NewDecoderCaseSensitivePreserveInts(in).Decode(&object); err != nil {
 			return err
 		}
-		return project.print(&unstructured.Unstructured{Object: object}, out)
+		return project.print(object, out)
 	case "contexts":
 		if len(args) != 1 || o.file == "" {
 			return errors.New("invalid context request")

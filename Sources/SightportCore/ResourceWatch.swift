@@ -47,36 +47,74 @@ public enum ResourceWatchTarget: Hashable, Sendable {
             + #"{{with .object}}{{if eq $action "DELETED"}}{{if .metadata.uid}}{{urlquery .metadata.uid}}{{else}}{{with .metadata.namespace}}{{urlquery .}}{{end}}/{{urlquery .metadata.name}}{{end}}{{else}}"#
             + fields + #"{{end}}{{end}}{{"\n"}}{{end}}"#
     }
+}
 
-    func decode(_ data: Data) throws -> [ResourceRow] {
-        switch self {
-        case .resource(let kind): return try ResourceRow.decodeList(data, kind: kind)
-        case .custom: return try ResourceRow.decodeList(data, columnCount: CustomResourceType.columns.count)
+// Projected fields are URL-escaped, so a newline always ends a row. Bound
+// unfinished records and scan only new bytes when a large row spans pipe reads.
+struct ResourceFrames {
+    private(set) var remainder = Data()
+    private static let maxRowBytes = 4 * 1024 * 1024
+
+    mutating func consume(_ data: Data, onLine: (Data) throws -> Void) throws {
+        var start = data.startIndex
+        while let end = data[start...].firstIndex(of: 10) {
+            let segment = data[start..<end]
+            guard remainder.count + segment.count <= Self.maxRowBytes else { throw KubernetesError.output }
+            if remainder.isEmpty {
+                try onLine(segment)
+            } else {
+                remainder.append(contentsOf: segment)
+                try onLine(remainder)
+                remainder.removeAll(keepingCapacity: true)
+            }
+            start = data.index(after: end)
         }
+        let tail = data[start...]
+        guard remainder.count + tail.count <= Self.maxRowBytes else { throw KubernetesError.output }
+        remainder.append(contentsOf: tail)
+    }
+}
+
+struct ResourceRowDecoder {
+    let kind: ResourceKind?
+    let columnCount: Int
+
+    init(_ target: ResourceWatchTarget) {
+        switch target {
+        case .resource(let kind):
+            self.kind = kind
+            columnCount = kind.columns.count
+        case .custom:
+            kind = nil
+            columnCount = CustomResourceType.columns.count
+        }
+    }
+
+    func decode(_ data: Data, separator: Character) throws -> ResourceRow {
+        guard let text = String(data: data, encoding: .utf8) else { throw ResourceReadError.invalidList }
+        return try ResourceRow.decodeRow(text[...], separator: separator, columnCount: columnCount, kind: kind)
     }
 }
 
 // Mutated exclusively on the SDK reader. Only complete, immutable snapshots
 // cross into the UI, and a slower consumer only needs the newest snapshot.
 private final class WatchedRows {
-    let target: ResourceWatchTarget
+    private let decoder: ResourceRowDecoder
     private var rows: [String: ResourceRow] = [:]
     private var order: [String] = []
-    private var pending = Data()
+    private var frames = ResourceFrames()
     private var dirty = false
     private var synchronized = false
     private let initialDeadline: TimeInterval
     private var lastPublish = ProcessInfo.processInfo.systemUptime
 
     init(target: ResourceWatchTarget, timeout: TimeInterval) {
-        self.target = target
+        decoder = ResourceRowDecoder(target)
         initialDeadline = ProcessInfo.processInfo.systemUptime + timeout
     }
 
     func consume(_ data: Data, publish: ([ResourceRow]) -> Void) throws {
-        pending.append(data)
-        while let end = pending.firstIndex(of: 10) {
-            let line = pending[..<end]
+        try frames.consume(data) { line in
             if line.elementsEqual("SYNC".utf8) {
                 guard !synchronized else { throw ResourceReadError.invalidWatch }
                 // The SDK has finished the list, including all pages. Its watch starts
@@ -85,16 +123,14 @@ private final class WatchedRows {
                 publish(order.compactMap { rows[$0] })
                 lastPublish = ProcessInfo.processInfo.systemUptime
                 dirty = false
-                pending.removeSubrange(...end)
-                continue
+                return
             }
             guard let split = line.firstIndex(of: 31) else { throw ResourceReadError.invalidWatch }
             let action = String(decoding: line[..<split], as: UTF8.self)
             let payload = line[line.index(after: split)...]
             switch action {
             case "ADDED", "MODIFIED":
-                let bytes = Data(payload.map { $0 == 31 ? 9 : $0 })
-                guard let row = try target.decode(bytes).first else { throw ResourceReadError.invalidWatch }
+                let row = try decoder.decode(payload, separator: "\u{1f}")
                 if rows[row.id] != row {
                     if rows.updateValue(row, forKey: row.id) == nil { order.append(row.id) }
                     dirty = true
@@ -106,9 +142,7 @@ private final class WatchedRows {
                 remove(id)
             default: throw ResourceReadError.invalidWatch
             }
-            pending.removeSubrange(...end)
         }
-        guard pending.count <= 4 * 1024 * 1024 else { throw KubernetesError.output }
     }
 
     private func remove(_ id: String) {
@@ -125,7 +159,7 @@ private final class WatchedRows {
             if force { throw ResourceReadError.invalidWatch }
             return 250
         }
-        if force && !pending.isEmpty { throw ResourceReadError.invalidWatch }
+        if force && !frames.remainder.isEmpty { throw ResourceReadError.invalidWatch }
         if dirty, force || now - lastPublish >= 0.12 {
             publish(order.compactMap { rows[$0] })
             lastPublish = now

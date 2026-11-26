@@ -170,6 +170,21 @@ func TestGetNamedSingularAndVersionThroughSelectedContext(t *testing.T) {
 	}
 }
 
+func TestProjectionPreservesIntegerFieldsAndKubernetesTemplateFunctions(t *testing.T) {
+	const input = `{"count":9007199254740993,"nested":[{"decimal":1e6}],"data":"dGVzdA=="}`
+	for _, tc := range []struct{ source, want string }{
+		{`{{if eq .count 9007199254740993}}{{.count}}{{end}}`, "9007199254740993"},
+		{`{{with index .nested 0}}{{if eq .decimal 1000000}}{{.decimal}}{{end}}{{end}}`, "1000000"},
+		{`{{base64decode .data}}`, "test"},
+	} {
+		var out bytes.Buffer
+		err := run(context.Background(), []string{"render", "-o", "go-template=" + tc.source}, strings.NewReader(input), &out)
+		if err != nil || out.String() != tc.want {
+			t.Errorf("got %q, %v; want %q", out.String(), err, tc.want)
+		}
+	}
+}
+
 func TestFailedTemplateDoesNotPrintSourceObject(t *testing.T) {
 	var out bytes.Buffer
 	input := strings.NewReader(`{"data":{"private":"fixture-secret"}}`)

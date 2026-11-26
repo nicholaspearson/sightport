@@ -82,8 +82,36 @@ public struct KubernetesClient: Sendable {
 
     public func resources(_ kind: ResourceKind, in file: URL, context: String,
                           namespace: String? = nil) async throws -> [ResourceRow] {
-        let output = try await resourceOutput(kind, in: file, context: context, namespace: namespace, template: kind.listTemplate)
-        return try ResourceRow.decodeList(output, kind: kind)
+        try await listResourceRows(.resource(kind), in: file, context: context, namespace: namespace)
+    }
+
+    func listResourceRows(_ target: ResourceWatchTarget, in file: URL, context: String,
+                          namespace: String?) async throws -> [ResourceRow] {
+        let arguments = try target.arguments(context: context, namespace: namespace)
+            + ["-o", "go-template=" + target.listTemplate]
+        let command = ["--kubeconfig=" + file.path] + arguments
+        let executable = try executable(for: file)
+        return try await onClusterReader {
+            var frames = ResourceFrames()
+            let decoder = ResourceRowDecoder(target)
+            var rows: [ResourceRow] = []
+            var rowError: Error?
+            func append(_ line: Data) throws {
+                if !line.isEmpty { rows.append(try decoder.decode(line, separator: "\t")) }
+            }
+            func consume(_ chunk: Data) {
+                // A failed command may have written partial stdout. Its API error
+                // takes precedence, as when decoding a completed list.
+                guard rowError == nil else { return }
+                do { try frames.consume(chunk, onLine: append) }
+                catch { rowError = error }
+            }
+            _ = try runClusterCommand(executable: executable, arguments: command, environment: sdkEnvironment,
+                                      operation: target.operation(namespace: namespace), timeout: timeout, onOutput: consume)
+            if let rowError { throw rowError }
+            try append(frames.remainder)
+            return rows
+        }
     }
 
     public func resourceCount(_ kind: ResourceKind, in file: URL, context: String,
@@ -194,14 +222,9 @@ public struct KubernetesClient: Sendable {
         let commandEnvironment = operation.usesHelm
             ? environment.filter { !$0.key.hasPrefix("HELM_KUBE") && $0.key != "HELM_NAMESPACE" }
             : sdkEnvironment
-        let worker = Task.detached(priority: .userInitiated) {
+        return try await onClusterReader {
             try runClusterCommand(executable: executable, arguments: ["--kubeconfig=\(file.path)"] + arguments,
                                   environment: commandEnvironment, operation: operation, timeout: timeout)
-        }
-        return try await withTaskCancellationHandler {
-            try await worker.value
-        } onCancel: {
-            worker.cancel()
         }
     }
 
@@ -213,6 +236,15 @@ public struct KubernetesClient: Sendable {
             throw missing
         }
         return namespace
+    }
+}
+
+private func onClusterReader<Result: Sendable>(_ read: @escaping @Sendable () throws -> Result) async throws -> Result {
+    let worker = Task.detached(priority: .userInitiated, operation: read)
+    return try await withTaskCancellationHandler {
+        try await worker.value
+    } onCancel: {
+        worker.cancel()
     }
 }
 

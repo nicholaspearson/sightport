@@ -19,6 +19,7 @@
 		8AEED39F8A386108E3B53F57 /* SightportMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = AADBB74B21B072F2393F28EF /* SightportMark.swift */; };
 		94DE3F6DF8405DD038DD498F /* Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79488D99B821B22DD468F49E /* Workspace.swift */; };
 		A7466793D34D40FCA61576A1 /* ClusterResourceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A6F3A9F67AE49B096DCCE10 /* ClusterResourceViews.swift */; };
+		B8A3CCBE86AB47C8B7A03F01 /* LiveResourceTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = E851176306F3462D842B492C /* LiveResourceTable.swift */; };
 		CBE61CB8C9A924ECD06413B7 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B766AAC0CDB8DBBA175C36 /* ContentView.swift */; };
 		EF2A3A93725042CC8362A4C1 /* ArgoDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2BF0DDE969741CE81992899 /* ArgoDashboardView.swift */; };
 		B7439FEE8EB74957813ED93A /* PortForwardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7439FEE8EB74957813ED93B /* PortForwardingView.swift */; };
@@ -45,6 +46,7 @@
 		79488D99B821B22DD468F49E /* Workspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Workspace.swift; sourceTree = "<group>"; };
 		7EEFABEE46059E2780C687E4 /* WorkbenchRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchRecord.swift; sourceTree = "<group>"; };
 		6A6F3A9F67AE49B096DCCE10 /* ClusterResourceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClusterResourceViews.swift; sourceTree = "<group>"; };
+		E851176306F3462D842B492C /* LiveResourceTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveResourceTable.swift; sourceTree = "<group>"; };
 		92B766AAC0CDB8DBBA175C36 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		F2BF0DDE969741CE81992899 /* ArgoDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArgoDashboardView.swift; sourceTree = "<group>"; };
 		B7439FEE8EB74957813ED93B /* PortForwardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortForwardingView.swift; sourceTree = "<group>"; };
@@ -120,6 +122,7 @@
 			children = (
 				CD81C20214A7245C986CFF98 /* WorkbenchInspector.swift */,
 				6A6F3A9F67AE49B096DCCE10 /* ClusterResourceViews.swift */,
+				E851176306F3462D842B492C /* LiveResourceTable.swift */,
 				92B766AAC0CDB8DBBA175C36 /* ContentView.swift */,
 				F2BF0DDE969741CE81992899 /* ArgoDashboardView.swift */,
 				B7439FEE8EB74957813ED93B /* PortForwardingView.swift */,
@@ -264,6 +267,7 @@
 			files = (
 				13435A9B5E8CA14C22121C15 /* WorkbenchInspector.swift in Sources */,
 				A7466793D34D40FCA61576A1 /* ClusterResourceViews.swift in Sources */,
+				B8A3CCBE86AB47C8B7A03F01 /* LiveResourceTable.swift in Sources */,
 				CBE61CB8C9A924ECD06413B7 /* ContentView.swift in Sources */,
 				EF2A3A93725042CC8362A4C1 /* ArgoDashboardView.swift in Sources */,
 				B7439FEE8EB74957813ED93A /* PortForwardingView.swift in Sources */,
@@ -418,13 +422,13 @@
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.4.1;
+				MARKETING_VERSION = 0.4.2;
 				PRODUCT_BUNDLE_IDENTIFIER = app.sightport.mac;
 				SIGHTPORT_UPDATE_FEED_URL = "https://github.com/nicholaspearson/sightport/releases/latest/download/appcast.xml";
 				SIGHTPORT_UPDATE_PUBLIC_KEY = "SBN8+q6wqpwW65v0Cj0eDU3KrIxQ+KlMM20oKmi+17U=";
@@ -439,13 +443,13 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.4.1;
+				MARKETING_VERSION = 0.4.2;
 				PRODUCT_BUNDLE_IDENTIFIER = app.sightport.mac;
 				SIGHTPORT_UPDATE_FEED_URL = "https://github.com/nicholaspearson/sightport/releases/latest/download/appcast.xml";
 				SIGHTPORT_UPDATE_PUBLIC_KEY = "SBN8+q6wqpwW65v0Cj0eDU3KrIxQ+KlMM20oKmi+17U=";

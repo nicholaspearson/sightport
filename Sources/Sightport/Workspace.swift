@@ -137,6 +137,21 @@ private struct LinkedResource {
     let uid: String?
 }
 
+private struct WorkspaceResourceRows: Sendable {
+    var rows: [ResourceRow] = []
+    var positions: [String: Int] = [:]
+
+    // Snapshot comparison can traverse the labels and containers of every pod.
+    // Compare and build the lookup index on the cooperative executor before publishing.
+    static func replacement(for rows: [ResourceRow], previous: [ResourceRow]) async -> Self? {
+        guard rows != previous, !Task.isCancelled else { return nil }
+        var positions: [String: Int] = [:]
+        positions.reserveCapacity(rows.count)
+        for (index, row) in rows.enumerated() { positions[row.id] = index }
+        return Self(rows: rows, positions: positions)
+    }
+}
+
 enum Reachability: Equatable {
     case checking
     case reachable
@@ -157,7 +172,11 @@ final class Workspace: ObservableObject {
     @Published var alert: WorkspaceAlert?
 
     @Published private(set) var connectedContext: ContextID?
-    @Published private(set) var rows: [ResourceRow] = []
+    @Published private var resourceRows = WorkspaceResourceRows() {
+        didSet { rowsRevision &+= 1 }
+    }
+    private(set) var rowsRevision: UInt64 = 0
+    var rows: [ResourceRow] { resourceRows.rows }
     @Published private(set) var windowVisible = true
     @Published private(set) var detailRefreshID = 0
     @Published private(set) var pollingAfterWatchFailure = false
@@ -170,7 +189,10 @@ final class Workspace: ObservableObject {
     @Published private(set) var customResourceCatalogError: String?
     @Published private(set) var customResourceCatalogLoading = false
     @Published private(set) var overview: [ResourceKind: WorkloadCount] = [:]
-    @Published private(set) var podMetrics: [PodKey: PodUsage] = [:]
+    @Published private(set) var podMetrics: [PodKey: PodUsage] = [:] {
+        didSet { podMetricsRevision &+= 1 }
+    }
+    private(set) var podMetricsRevision: UInt64 = 0
     @Published private(set) var podMetricsLoading = false
     @Published private(set) var podMetricsError: String?
     @Published private(set) var podLogTarget: PodLogTarget?
@@ -181,7 +203,12 @@ final class Workspace: ObservableObject {
 
     func selectedResource(in kind: ResourceKind) -> ResourceRow? {
         guard page == .cluster(.resources(kind)), case .resource(let id) = selection else { return nil }
-        return rows.first { $0.id == id }
+        return resourceRow(id: id)
+    }
+
+    func resourceRow(id: String) -> ResourceRow? {
+        guard let index = resourceRows.positions[id] else { return nil }
+        return resourceRows.rows[index]
     }
 
     private var resourceTask: Task<Void, Never>?
@@ -374,7 +401,7 @@ final class Workspace: ObservableObject {
         let previous = tabSelections[page]
         switch page {
         case .cluster:
-            if case .resource(let id) = previous, rows.contains(where: { $0.id == id }) {
+            if case .resource(let id) = previous, resourceRow(id: id) != nil {
                 select(previous)
             } else if page == .cluster(.resources(.pods)) || page.configDataKind != nil {
                 select(nil)
@@ -631,8 +658,8 @@ extension Workspace {
 
     private func clearResourceTable() {
         stopResourceReads()
-        rows = []
-        podMetrics = [:]
+        if !rows.isEmpty { resourceRows = WorkspaceResourceRows() }
+        if !podMetrics.isEmpty { podMetrics = [:] }
         podMetricsLoading = false
         podMetricsError = nil
         linkedResource = nil
@@ -677,9 +704,9 @@ extension Workspace {
         default:
             resourceTask = Task {
                 await observeRows(section, in: id, scope: scope, onRows: { result in
-                    self.applyRows(result, section: section, context: id, namespace: scope)
+                    await self.applyRows(result, section: section, context: id, namespace: scope)
                 }, onError: { error in
-                    self.rows = []
+                    if !self.rows.isEmpty { self.resourceRows = WorkspaceResourceRows() }
                     self.selection = nil
                     self.resourceError = error.localizedDescription
                     self.resourceLoading = false
@@ -702,7 +729,7 @@ extension Workspace {
     }
 
     private func observeRows(_ section: ClusterSection, in id: ContextID, scope: String?, followsTable: Bool = true,
-                             onRows: @escaping @MainActor ([ResourceRow]) -> Void,
+                             onRows: @escaping @MainActor ([ResourceRow]) async -> Void,
                              onError: @escaping @MainActor (Error) -> Void,
                              onPolling: @escaping @MainActor (Bool) -> Void = { _ in }) async {
         let generation = resourceGeneration
@@ -712,17 +739,18 @@ extension Workspace {
         } else {
             target = section.listKind.map(ResourceWatchTarget.resource)
         }
+        @MainActor @Sendable func receive(_ rows: [ResourceRow]) async {
+            guard !Task.isCancelled, connectedContext == id,
+                  !followsTable || resourceGeneration == generation else { return }
+            onPolling(false)
+            await onRows(rows)
+        }
         while !Task.isCancelled {
             if let target {
                 let started = ContinuousClock.now
                 do {
                     try await client.watchResources(target, in: id.file, context: id.name, namespace: scope) { rows in
-                        await MainActor.run {
-                            guard !Task.isCancelled, self.connectedContext == id,
-                                  !followsTable || self.resourceGeneration == generation else { return }
-                            onPolling(false)
-                            onRows(rows)
-                        }
+                        await receive(rows)
                     }
                 } catch { /* The next LIST rechecks access and retrieves a fresh snapshot. */ }
                 guard !Task.isCancelled else { return }
@@ -747,7 +775,7 @@ extension Workspace {
                         snapshot = try await client.resources(kind, in: id.file, context: id.name, namespace: scope)
                     }
                     guard !Task.isCancelled else { return }
-                    onRows(snapshot)
+                    await onRows(snapshot)
                 } catch {
                     guard !Task.isCancelled else { return }
                     onError(error)
@@ -764,36 +792,38 @@ extension Workspace {
         if namespaceError != nil { namespaceError = nil }
     }
 
-    private func applyRows(_ result: [ResourceRow], section: ClusterSection, context: ContextID, namespace: String?) {
+    private func applyRows(_ result: [ResourceRow], section: ClusterSection, context: ContextID, namespace: String?) async {
+        let generation = resourceGeneration
+        let replacement = await WorkspaceResourceRows.replacement(for: result, previous: rows)
+        guard !Task.isCancelled, resourceGeneration == generation, connectedContext == context else { return }
         let restore = resourceLoading || resourceError != nil || linkedResource != nil
-        if rows != result { rows = result }
+        if let replacement { resourceRows = replacement }
         if resourceError != nil { resourceError = nil }
         if resourceLoading { resourceLoading = false }
         if restore {
             finishResourceSelection()
-        } else if case .resource(let selected) = selection, !result.contains(where: { $0.id == selected }) {
+        } else if case .resource(let selected) = selection, resourceRow(id: selected) == nil {
             select(nil)
         }
         if section == .resources(.namespaces) { updateNamespaces(result) }
         if section == .resources(.customResourceDefinitions) { applyCustomResourceCatalog(result) }
         guard section == .resources(.pods) else { return }
         if case .terminatePod(let request) = alert?.action,
-           !result.contains(where: { $0.id == request.row.id && $0.pod?.isTerminating == false }) {
+           resourceRow(id: request.row.id)?.pod?.isTerminating != false {
             dismissPodTerminationPrompt()
         }
         if !terminatingPods.isEmpty {
-            let remaining = Set(result.filter { $0.pod?.isTerminating == false }.map(\.id))
             let finished = terminatingPods.filter { id, request in
-                (namespace == nil || namespace == request.namespace) && !remaining.contains(id)
+                (namespace == nil || namespace == request.namespace) && resourceRow(id: id)?.pod?.isTerminating != false
             }
             for id in finished.keys { terminatingPods.removeValue(forKey: id) }
         }
         for terminal in podTerminals where namespace == nil || terminal.namespace == namespace {
-            let pod = result.first { $0.id == terminal.podID }
+            let pod = resourceRow(id: terminal.podID)
             terminal.updateContainers(pod?.runningContainerNames ?? [])
         }
         if let target = podLogTarget {
-            if let pod = result.first(where: { $0.id == target.podID }), let containers = pod.pod?.containers {
+            if let containers = resourceRow(id: target.podID)?.pod?.containers {
                 if containers.map(\.name) != target.containers.map(\.name) {
                     podLogTarget?.containers = containers
                 }
@@ -827,7 +857,7 @@ extension Workspace {
     }
 
     private func isVisiblePod(_ row: ResourceRow) -> Bool {
-        page == .cluster(.resources(.pods)) && rows.contains { $0.id == row.id }
+        page == .cluster(.resources(.pods)) && resourceRow(id: row.id) != nil
     }
 
     func inspectPod(_ row: ResourceRow) {
@@ -858,7 +888,7 @@ extension Workspace {
     func confirmPodTermination(_ request: PodTerminationRequest) {
         guard connectedContext == request.context, page == .cluster(.resources(.pods)) else { return }
         let row = request.row
-        guard let current = rows.first(where: { $0.id == row.id && $0.name == row.name && $0.namespace == request.namespace }),
+        guard let current = resourceRow(id: row.id), current.name == row.name, current.namespace == request.namespace,
               canTerminatePod(current) else { return }
         terminatingPods[row.id] = request
         Task {
@@ -899,7 +929,7 @@ extension Workspace {
 
     func openPodTerminal(_ selectedRow: ResourceRow) {
         guard page == .cluster(.resources(.pods)), let context = connectedContext,
-              let row = rows.first(where: { $0.id == selectedRow.id }), let namespace = row.namespace else { return }
+              let row = resourceRow(id: selectedRow.id), let namespace = row.namespace else { return }
         let containers = row.runningContainerNames
         guard !containers.isEmpty else { return }
         if let existing = podTerminals.first(where: { $0.podID == row.id && $0.context == context }) {
@@ -930,7 +960,7 @@ extension Workspace {
 
     func loadPodLogs(for target: PodLogTarget, container: String, previous: Bool) async throws -> String {
         guard windowVisible, podLogTarget?.id == target.id, target.context == connectedContext,
-              rows.contains(where: { $0.id == target.podID }),
+              resourceRow(id: target.podID) != nil,
               target.containers.contains(where: { $0.name == container }) else { throw CancellationError() }
         return try await client.podLogs(in: target.context.file, context: target.context.name,
                                         namespace: target.namespace, pod: target.name, container: container,
@@ -938,7 +968,7 @@ extension Workspace {
     }
 
     func showNamespace(of row: ResourceRow) {
-        guard case .cluster(.resources) = page, rows.contains(where: { $0.id == row.id }),
+        guard case .cluster(.resources) = page, resourceRow(id: row.id) != nil,
               let name = row.namespace else { return }
         reveal(.namespaces, name: name)
     }
@@ -957,7 +987,7 @@ extension Workspace {
     }
 
     func inspectArgoApplication(_ row: ResourceRow) {
-        guard page == .cluster(.argoDashboard), rows.contains(where: { $0.id == row.id }) else { return }
+        guard page == .cluster(.argoDashboard), resourceRow(id: row.id) != nil else { return }
         reveal(.argoApplications, name: row.name, namespace: row.namespace, uid: row.id)
     }
 

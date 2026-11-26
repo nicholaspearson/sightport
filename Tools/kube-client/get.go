@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"strings"
+	"text/template"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,7 +25,9 @@ import (
 )
 
 type projection struct {
-	template *printers.GoTemplatePrinter
+	template    *template.Template
+	kubePrinter *printers.GoTemplatePrinter
+	buffer      bytes.Buffer
 }
 
 func newProjection(format string) (*projection, error) {
@@ -36,17 +40,49 @@ func newProjection(format string) (*projection, error) {
 		return nil, errors.New("invalid projection")
 	}
 	printer.AllowMissingKeys(true)
-	return &projection{template: printer}, nil
+	// Kubernetes additionally accepts base64decode and exists. Such templates
+	// are valid for the upstream printer even when the standard parser rejects them.
+	direct, _ := template.New("output").Option("missingkey=default").Parse(source)
+	return &projection{template: direct, kubePrinter: printer}, nil
 }
 
-func (p *projection) print(obj runtime.Object, out io.Writer) error {
-	// The upstream printer writes the entire source object as diagnostics on
-	// template errors. Only release successfully projected output to the app.
-	var buf bytes.Buffer
-	if err := p.template.PrintObj(obj, &buf); err != nil {
+// The upstream printer round-trips objects through JSON with integer-preserving
+// decoding. This turns values such as 1.0 or 1e6 into int64, affecting template
+// comparisons and rendering. Defer to that printer for these uncommon objects.
+func hasIntegralFloat(value any) bool {
+	switch v := value.(type) {
+	case float64:
+		return math.Trunc(v) == v
+	case map[string]any:
+		for _, field := range v {
+			if hasIntegralFloat(field) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if hasIntegralFloat(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (p *projection) print(obj map[string]any, out io.Writer) error {
+	// One projection belongs to one command and executes serially. Stage each
+	// result so neither partial template output nor diagnostics leak on failure.
+	p.buffer.Reset()
+	var err error
+	if p.template != nil && !hasIntegralFloat(obj) {
+		err = p.template.Execute(&p.buffer, obj)
+	} else {
+		err = p.kubePrinter.PrintObj(&unstructured.Unstructured{Object: obj}, &p.buffer)
+	}
+	if err != nil {
 		return errors.New("invalid resource projection")
 	}
-	_, err := buf.WriteTo(out)
+	_, err = p.buffer.WriteTo(out)
 	return err
 }
 
@@ -102,7 +138,7 @@ func get(ctx context.Context, cfg *rest.Config, o options, target string, out io
 		if err != nil {
 			return err
 		}
-		return project.print(obj, out)
+		return project.print(obj.Object, out)
 	}
 	return listAndWatch(ctx, api, o, project, out)
 }
@@ -216,7 +252,7 @@ func listAndWatch(ctx context.Context, api dynamic.ResourceInterface, o options,
 	if !o.watch {
 		snapshot.SetContinue("")
 		snapshot.SetRemainingItemCount(nil)
-		return project.print(snapshot, out)
+		return project.print(snapshot.UnstructuredContent(), out)
 	}
 	// stdout is an unbuffered *os.File. The Swift reader can publish a whole
 	// snapshot even if the list is empty or RBAC rejects the subsequent watch.
@@ -260,11 +296,12 @@ func listAndWatch(ctx context.Context, api dynamic.ResourceInterface, o options,
 }
 
 func printEvent(project *projection, out io.Writer, typ watch.EventType, obj runtime.Object, envelope bool) error {
+	resource, ok := obj.(*unstructured.Unstructured)
+	if !ok || resource == nil {
+		return fmt.Errorf("invalid %s event", typ)
+	}
 	if !envelope {
-		return project.print(obj, out)
+		return project.print(resource.Object, out)
 	}
-	if obj == nil {
-		return fmt.Errorf("empty %s event", typ)
-	}
-	return project.print(&metav1.WatchEvent{Type: string(typ), Object: runtime.RawExtension{Object: obj}}, out)
+	return project.print(map[string]any{"type": string(typ), "object": resource.Object}, out)
 }

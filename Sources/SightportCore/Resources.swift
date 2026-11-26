@@ -121,7 +121,8 @@ public enum ResourceKind: String, CaseIterable, Hashable, Sendable {
         }
     }
 
-    public var columns: [String] { fields.map(\.name) }
+    private static let columnsByKind = Dictionary(uniqueKeysWithValues: allCases.map { ($0, $0.fields.map(\.name)) })
+    public var columns: [String] { Self.columnsByKind[self]! }
 
     private var fields: [ResourceField] {
         let ready = ResourceField(name: "Ready", template: #"{{range .status.conditions}}{{if eq .type "Ready"}}{{urlquery .status}}{{end}}{{end}}"#)
@@ -242,40 +243,39 @@ public struct ResourceRow: Identifiable, Hashable, Sendable {
     }
 
     static func decodeList(_ data: Data, kind: ResourceKind) throws -> [Self] {
-        try decodeList(data, columnCount: kind.columns.count, kind: kind)
-    }
-
-    static func decodeList(_ data: Data, columnCount: Int) throws -> [Self] {
-        try decodeList(data, columnCount: columnCount, kind: nil)
-    }
-
-    private static func decodeList(_ data: Data, columnCount: Int, kind: ResourceKind?) throws -> [Self] {
         guard let text = String(data: data, encoding: .utf8) else { throw ResourceReadError.invalidList }
+        let columnCount = kind.columns.count
+        return try text.split(separator: "\n").map {
+            try decodeRow($0, separator: "\t", columnCount: columnCount, kind: kind)
+        }
+    }
+
+    static func decodeRow(_ line: Substring, separator: Character, columnCount: Int, kind: ResourceKind?) throws -> Self {
         let baseCount = 4 + columnCount
         let includesPod = kind == .pods
-        return try text.split(separator: "\n").map { line in
-            let cells = line.split(separator: "\t", omittingEmptySubsequences: false)
-            let hasVersion = kind?.includesResourceVersion == true
-            guard cells.count == baseCount + ((includesPod || hasVersion) ? 1 : 0) else { throw ResourceReadError.invalidList }
-            let fields = try cells.prefix(baseCount).map(unescapeResourceField)
-            guard !fields[1].isEmpty else { throw ResourceReadError.invalidList }
-            let uid = fields[0], name = fields[1], namespace = fields[2], timestamp = fields[3]
-            let rawValues = Array(fields.dropFirst(4))
-            let values = kind.map { ArgoFields.displayValues(rawValues, for: $0) } ?? rawValues
-            let pod = includesPod ? try PodDetails(projection: cells[baseCount], phase: values[0],
-                                                  ready: values[1], node: values[2]) : nil
-            return ResourceRow(id: uid.isEmpty ? namespace + "/" + name : uid, name: name,
-                               namespace: namespace.isEmpty ? nil : namespace,
-                               createdAt: try? Date.ISO8601FormatStyle(includingFractionalSeconds: timestamp.contains(".")).parse(timestamp),
-                               values: values, pod: pod,
-                               resourceVersion: hasVersion && !cells[baseCount].isEmpty ? try unescapeResourceField(cells[baseCount]) : pod?.resourceVersion)
-        }
+        let cells = line.split(separator: separator, omittingEmptySubsequences: false)
+        let hasVersion = kind?.includesResourceVersion == true
+        guard cells.count == baseCount + ((includesPod || hasVersion) ? 1 : 0) else { throw ResourceReadError.invalidList }
+        let fields = try cells.prefix(baseCount).map(unescapeResourceField)
+        guard !fields[1].isEmpty else { throw ResourceReadError.invalidList }
+        let uid = fields[0], name = fields[1], namespace = fields[2], timestamp = fields[3]
+        let rawValues = Array(fields.dropFirst(4))
+        let values = kind.map { ArgoFields.displayValues(rawValues, for: $0) } ?? rawValues
+        let pod = includesPod ? try PodDetails(projection: cells[baseCount], phase: values[0],
+                                              ready: values[1], node: values[2]) : nil
+        return ResourceRow(id: uid.isEmpty ? namespace + "/" + name : uid, name: name,
+                           namespace: namespace.isEmpty ? nil : namespace,
+                           createdAt: try? Date.ISO8601FormatStyle(includingFractionalSeconds: timestamp.contains(".")).parse(timestamp),
+                           values: values, pod: pod,
+                           resourceVersion: hasVersion && !cells[baseCount].isEmpty ? try unescapeResourceField(cells[baseCount]) : pod?.resourceVersion)
     }
 }
 
 func unescapeResourceField(_ escaped: Substring) throws -> String {
-    if !escaped.contains("%") && !escaped.contains("+") { return String(escaped) }
-    guard let value = escaped.replacingOccurrences(of: "+", with: " ").removingPercentEncoding else {
+    let hasSpace = escaped.utf8.contains(43)
+    if !hasSpace && !escaped.utf8.contains(37) { return String(escaped) }
+    let normalized = hasSpace ? escaped.replacingOccurrences(of: "+", with: " ") : String(escaped)
+    guard let value = normalized.removingPercentEncoding else {
         throw ResourceReadError.invalidList
     }
     return value
