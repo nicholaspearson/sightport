@@ -188,15 +188,15 @@ public struct KubernetesClient: Sendable {
         return executable
     }
 
-    func run(_ arguments: [String], file: URL, operation: ClusterReadOperation) async throws -> Data {
+    func run(_ arguments: [String], file: URL, operation: ClusterOperation) async throws -> Data {
         let executable = try executable(for: file, helm: operation.usesHelm)
         // Helm's global connection overrides must not silently redirect the selected context.
         let commandEnvironment = operation.usesHelm
             ? environment.filter { !$0.key.hasPrefix("HELM_KUBE") && $0.key != "HELM_NAMESPACE" }
             : sdkEnvironment
         let worker = Task.detached(priority: .userInitiated) {
-            try runClusterRead(executable: executable, arguments: ["--kubeconfig=\(file.path)"] + arguments,
-                               environment: commandEnvironment, operation: operation, timeout: timeout)
+            try runClusterCommand(executable: executable, arguments: ["--kubeconfig=\(file.path)"] + arguments,
+                                  environment: commandEnvironment, operation: operation, timeout: timeout)
         }
         return try await withTaskCancellationHandler {
             try await worker.value
@@ -235,9 +235,9 @@ private struct ContextList: Decodable {
     }
 }
 
-enum ClusterReadOperation {
-    case discovery, connection, resources(ResourceKind, String?), podMetrics, podLogs
-    case secretDetails, configMapDetails
+enum ClusterOperation {
+    case discovery, connection, resources(ResourceKind, String?), podMetrics, podLogs, podInspection
+    case secretDetails, configMapDetails, podTermination
     case customResources(String, String?), helmReleases
 
     var usesHelm: Bool {
@@ -251,12 +251,21 @@ enum KubernetesError: LocalizedError {
     case helmLaunch, helmUnavailable, helmDenied, customResourceDenied(String), customResourceUnavailable(String)
     case resourceDenied(ResourceKind, String?), unsupported(ResourceKind), namespaceMissing(String)
     case secretDenied, secretMissing, secretUnavailable
+    case podInspectionUnavailable, podInspectionDenied
+    case podIdentityMissing, podTerminationDenied, podTerminationMissing, podTerminationConflict, podTerminationUnconfirmed
     case configMapDenied, configMapMissing, configMapUnavailable
     case metricsDenied, metricsUnavailable, logsDenied, logTargetMissing, containerWaiting, previousUnavailable, logsUnavailable
     case unavailable, authentication, denied, certificate, credentialHelper, timeout, unexpectedServer, output
 
     var errorDescription: String? {
         switch self {
+        case .podInspectionUnavailable: return "Could not read this pod’s container details."
+        case .podInspectionDenied: return "This context does not have permission to get this pod."
+        case .podIdentityMissing: return "Select a pod with a namespace, name, and UID."
+        case .podTerminationDenied: return "This context lacks permission to terminate the pod."
+        case .podTerminationMissing: return "The selected pod no longer exists."
+        case .podTerminationConflict: return "The cluster rejected the deletion because the pod changed. Select the current pod to continue."
+        case .podTerminationUnconfirmed: return "Sightport could not confirm whether the cluster accepted termination. Check the pod’s status before trying again."
         case .missingSDK: return "The bundled Kubernetes client is missing. Reinstall Sightport and reopen the app."
         case .missingHelm: return "Install the Helm 3 or 4 command-line tool to view releases. Sightport checks your PATH and standard Homebrew locations."
         case .helmLaunch: return "Sightport could not start Helm. Check that it can run on this Mac."
@@ -304,10 +313,23 @@ enum KubernetesError: LocalizedError {
         }
     }
 
-    static func failure(stderr: Data, operation: ClusterReadOperation) -> Self {
+    static func failure(stderr: Data, operation: ClusterOperation) -> Self {
         if case .discovery = operation { return .invalidContexts }
         // Credential helpers control stderr. Use it only for classification, never for display or storage.
         let message = String(decoding: stderr, as: UTF8.self).lowercased()
+        if case .podTermination = operation {
+            // The final helper diagnostic describes this DELETE. Credential plugins
+            // can write unrelated messages to the same stderr stream.
+            switch message.split(whereSeparator: \.isNewline).last {
+            case "pod-delete-invalid-target": return .podIdentityMissing
+            case "pod-delete-forbidden": return .podTerminationDenied
+            case "pod-delete-not-found": return .podTerminationMissing
+            case "pod-delete-conflict": return .podTerminationConflict
+            case "unauthorized": return .authentication
+            case "context not found": return .missingContext
+            default: return .podTerminationUnconfirmed
+            }
+        }
         if message.contains("context") && (message.contains("not exist") || message.contains("not found")) { return .missingContext }
         if message.contains("unauthorized") || message.contains("credentials (get") { return .authentication }
         if case .customResources(let resource, let namespace) = operation {
@@ -330,6 +352,7 @@ enum KubernetesError: LocalizedError {
             switch operation {
             case .podMetrics: return .metricsDenied
             case .podLogs: return .logsDenied
+            case .podInspection: return .podInspectionDenied
             case .helmReleases: return .helmDenied
             case .secretDetails: return .secretDenied
             case .configMapDetails: return .configMapDenied
@@ -349,6 +372,9 @@ enum KubernetesError: LocalizedError {
             return .secretUnavailable
         }
         if case .podMetrics = operation { return .metricsUnavailable }
+        if case .podInspection = operation {
+            return message.contains("not found") ? .logTargetMissing : .podInspectionUnavailable
+        }
         if case .podLogs = operation {
             if message.contains("previous terminated container") { return .previousUnavailable }
             if message.contains("waiting to start") { return .containerWaiting }
@@ -381,9 +407,9 @@ final class ClusterReadCancellation: @unchecked Sendable {
 
 // Read both pipes on the worker task. Polling bounds cancellation latency even when an
 // external credential helper hangs with an output descriptor open.
-func runClusterRead(executable: URL, arguments: [String], environment: [String: String],
-                    operation: ClusterReadOperation, timeout: TimeInterval, cancellation: ClusterReadCancellation? = nil,
-                    onOutput: ((Data) throws -> Void)? = nil, onTick: (() throws -> Int32)? = nil) throws -> Data {
+func runClusterCommand(executable: URL, arguments: [String], environment: [String: String],
+                       operation: ClusterOperation, timeout: TimeInterval, cancellation: ClusterReadCancellation? = nil,
+                       onOutput: ((Data) throws -> Void)? = nil, onTick: (() throws -> Int32)? = nil) throws -> Data {
     try Task.checkCancellation()
     try cancellation?.check()
     let process = Process()

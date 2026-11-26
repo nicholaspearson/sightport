@@ -23,10 +23,31 @@ public struct ContextID: Codable, Hashable, Sendable {
 public struct ContextPreferences: Codable, Equatable, Sendable {
     public var favorites: Set<ContextID>
     public var activeContext: ContextID?
+    public private(set) var removedContexts: Set<ContextID> = []
 
     public init(favorites: Set<ContextID> = [], activeContext: ContextID? = nil) {
         self.favorites = favorites
         self.activeContext = activeContext
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        favorites = try values.decode(Set<ContextID>.self, forKey: .favorites)
+        activeContext = try values.decodeIfPresent(ContextID.self, forKey: .activeContext)
+        removedContexts = try values.decodeIfPresent(Set<ContextID>.self, forKey: .removedContexts) ?? []
+        favorites.subtract(removedContexts)
+        if let activeContext, removedContexts.contains(activeContext) { self.activeContext = nil }
+    }
+
+    public mutating func removeContext(_ id: ContextID) {
+        removedContexts.insert(id)
+        favorites.remove(id)
+        if activeContext == id { activeContext = nil }
+    }
+
+    public mutating func restoreContexts(in file: URL) {
+        let source = file.standardizedFileURL
+        removedContexts = removedContexts.filter { $0.file != source }
     }
 }
 

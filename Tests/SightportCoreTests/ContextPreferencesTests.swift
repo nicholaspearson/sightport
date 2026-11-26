@@ -41,6 +41,43 @@ final class ContextPreferencesTests: XCTestCase {
         XCTAssertEqual(try repository.load(), ContextPreferences(favorites: [], activeContext: second))
     }
 
+    func testPreferencesFromBeforeContextRemovalStillLoad() throws {
+        let id = ContextID(file: directory.appendingPathComponent("config"), name: "dev")
+        let stored = ["file": id.file.absoluteString, "name": id.name]
+        let data = try JSONSerialization.data(withJSONObject: ["favorites": [stored], "activeContext": stored])
+        try data.write(to: preferencesURL)
+        let reopened = try repository.load()
+        XCTAssertEqual(reopened, ContextPreferences(favorites: [id], activeContext: id))
+        XCTAssertTrue(reopened.removedContexts.isEmpty)
+    }
+
+    func testRemoveAndReimportAreScopedToExactContextAndFile() throws {
+        let file = directory.appendingPathComponent("config")
+        let originalFile = Data("apiVersion: v1\nkind: Config\n".utf8)
+        try originalFile.write(to: file)
+        let removed = ContextID(file: file, name: "dev")
+        let sibling = ContextID(file: file, name: "staging")
+        let other = ContextID(file: directory.appendingPathComponent("other"), name: "dev")
+        var preferences = ContextPreferences(favorites: [removed, sibling, other], activeContext: other)
+        preferences.removeContext(removed)
+        preferences.removeContext(removed)
+        try repository.save(preferences)
+        var reopened = try repository.load()
+        XCTAssertEqual(reopened.removedContexts, [removed])
+        XCTAssertEqual(reopened.favorites, [sibling, other])
+        XCTAssertEqual(reopened.activeContext, other)
+
+        reopened.removeContext(other)
+        XCTAssertNil(reopened.activeContext)
+        reopened.restoreContexts(in: directory.appendingPathComponent("nested/../config"))
+        try repository.save(reopened)
+        let restored = try repository.load()
+        XCTAssertEqual(restored.removedContexts, [other])
+        XCTAssertEqual(restored.favorites, [sibling])
+        XCTAssertNil(restored.activeContext)
+        XCTAssertEqual(try Data(contentsOf: file), originalFile)
+    }
+
     func testLegacyFavoritesAndActiveSelectionMigrateOnce() throws {
         let first = ContextID(file: directory.appendingPathComponent("a"), name: "cluster")
         let second = ContextID(file: directory.appendingPathComponent("b"), name: "cluster")

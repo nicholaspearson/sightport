@@ -98,7 +98,7 @@ struct ConfigPropertiesGrid<Content: View>: View {
     }
 }
 
-struct ConfigDetailRead<Value>: ViewModifier {
+struct ResourceDetailRead<Value>: ViewModifier {
     @EnvironmentObject private var workspace: Workspace
     let version: String?
     let attempt: Int
@@ -183,7 +183,7 @@ private struct ConfigMapContent: View {
                 }
             }
         }
-        .modifier(ConfigDetailRead(version: row.resourceVersion, attempt: attempt, load: {
+        .modifier(ResourceDetailRead(version: row.resourceVersion, attempt: attempt, load: {
             try await KubernetesClient().configMapDetails(for: row, in: context.file, context: context.name)
         }, receive: { result = $0 }))
     }

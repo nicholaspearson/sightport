@@ -23,7 +23,7 @@ public enum ResourceWatchTarget: Hashable, Sendable {
         return args
     }
 
-    func operation(namespace: String?) -> ClusterReadOperation {
+    func operation(namespace: String?) -> ClusterOperation {
         switch self {
         case .resource(let kind): return .resources(kind, namespace)
         case .custom(let type): return .customResources(type.resourceName, type.isNamespaced ? namespace : nil)
@@ -149,10 +149,10 @@ func streamResourceRows(_ target: ResourceWatchTarget, executable: URL, file: UR
         func publish(_ rows: [ResourceRow]) { continuation.yield(rows) }
         do {
             let state = WatchedRows(target: target, timeout: timeout)
-            _ = try runClusterRead(executable: executable, arguments: watch, environment: environment,
-                                   operation: operation, timeout: 610, cancellation: cancellation,
-                                   onOutput: { try state.consume($0, publish: publish) },
-                                   onTick: { try state.tick(publish: publish) })
+            _ = try runClusterCommand(executable: executable, arguments: watch, environment: environment,
+                                      operation: operation, timeout: 610, cancellation: cancellation,
+                                      onOutput: { try state.consume($0, publish: publish) },
+                                      onTick: { try state.tick(publish: publish) })
             _ = try state.tick(publish: publish, force: true)
             continuation.finish()
         } catch { continuation.finish(throwing: error) }

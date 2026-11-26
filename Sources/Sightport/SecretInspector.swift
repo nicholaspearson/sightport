@@ -91,7 +91,7 @@ private struct SecretReadSection<Value, Content: View>: View {
                 ProgressView().controlSize(.small)
             }
         }
-        .modifier(ConfigDetailRead(version: version, attempt: attempt, load: load, receive: {
+        .modifier(ResourceDetailRead(version: version, attempt: attempt, load: load, receive: {
             result = $0
             loadedVersion = version
         }))

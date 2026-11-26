@@ -268,7 +268,7 @@ public struct ResourceRow: Identifiable, Hashable, Sendable {
                                namespace: namespace.isEmpty ? nil : namespace,
                                createdAt: try? Date.ISO8601FormatStyle(includingFractionalSeconds: timestamp.contains(".")).parse(timestamp),
                                values: values, pod: pod,
-                               resourceVersion: hasVersion && !cells[baseCount].isEmpty ? try unescapeResourceField(cells[baseCount]) : nil)
+                               resourceVersion: hasVersion && !cells[baseCount].isEmpty ? try unescapeResourceField(cells[baseCount]) : pod?.resourceVersion)
         }
     }
 }

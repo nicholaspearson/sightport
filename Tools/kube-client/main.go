@@ -24,10 +24,10 @@ import (
 )
 
 type options struct {
-	file, context, namespace, output, raw, selector, fieldSelector, container, address, apiVersion string
-	watch, watchEvents, initialSnapshot, allNamespaces, previous, stdin, tty                       bool
-	tail, limit                                                                                    int64
-	timeout                                                                                        time.Duration
+	file, context, namespace, output, raw, selector, fieldSelector, container, address, apiVersion, uid string
+	watch, watchEvents, initialSnapshot, allNamespaces, previous, stdin, tty                            bool
+	tail, limit                                                                                         int64
+	timeout                                                                                             time.Duration
 }
 
 func parse(args []string) (options, []string, error) {
@@ -43,6 +43,7 @@ func parse(args []string) (options, []string, error) {
 	f.StringVar(&o.selector, "selector", "", "")
 	f.StringVar(&o.fieldSelector, "field-selector", "", "")
 	f.StringVar(&o.container, "container", "", "")
+	f.StringVar(&o.uid, "uid", "", "")
 	f.StringVar(&o.address, "address", "127.0.0.1", "")
 	f.DurationVar(&o.timeout, "request-timeout", 0, "")
 	f.BoolVar(&o.watch, "watch", false, "")
@@ -151,6 +152,11 @@ func run(ctx context.Context, argv []string, in io.Reader, out io.Writer) error 
 		if len(args) == 2 {
 			return get(ctx, cfg, o, args[1], out)
 		}
+	case "terminate-pod":
+		if len(args) != 2 || o.allNamespaces {
+			return podDeleteInvalid
+		}
+		return terminatePod(ctx, cfg, o.namespace, args[1], o.uid)
 	case "metrics":
 		if len(args) == 1 {
 			return podMetrics(ctx, cfg, o.namespace, out)
@@ -174,6 +180,10 @@ func run(ctx context.Context, argv []string, in io.Reader, out io.Writer) error 
 // Emit error categories only. The server, templates and credential plugins may
 // include object contents or credential fields in their error text.
 func diagnostic(err error) string {
+	var deletion podDeleteError
+	if errors.As(err, &deletion) {
+		return string(deletion)
+	}
 	var status apierrors.APIStatus
 	if errors.As(err, &status) {
 		switch status.Status().Reason {

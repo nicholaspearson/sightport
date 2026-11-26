@@ -36,7 +36,20 @@ struct ContentView: View {
             endWindowSessions()
         }
         .alert(item: $workspace.alert) { item in
-            Alert(title: Text("Sightport"), message: Text(item.message), dismissButton: .default(Text("OK")))
+            switch item.action {
+            case .removeContext(let id):
+                return Alert(title: Text("Remove from Sightport?"), message: Text(verbatim: item.message),
+                             primaryButton: .cancel(), secondaryButton: .destructive(Text("Remove")) {
+                                 Task { @MainActor in workspace.confirmContextRemoval(id) }
+                             })
+            case .terminatePod(let request):
+                return Alert(title: Text("Terminate Pod?"), message: Text(verbatim: item.message),
+                             primaryButton: .cancel(), secondaryButton: .destructive(Text("Terminate Pod")) {
+                                 workspace.confirmPodTermination(request)
+                             })
+            case nil:
+                return Alert(title: Text("Sightport"), message: Text(verbatim: item.message), dismissButton: .default(Text("OK")))
+            }
         }
     }
 
@@ -238,7 +251,7 @@ struct ContentView: View {
             Label("Connection failed · " + name, systemImage: "exclamationmark.circle")
                 .help(reason)
         } else if let active = workspace.activeContext {
-            let connected = workspace.checks[active] == .reachable
+            let connected = workspace.connectedContext == active
             Label((connected ? "Connected · " : "Last used · ") + active.name,
                   systemImage: connected ? "checkmark.circle" : "clock")
                 .help(active.name + " · " + displayPath(active.file))

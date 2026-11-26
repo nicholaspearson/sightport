@@ -219,6 +219,11 @@ private struct PodActions: View {
         if row.pod?.node != nil {
             Button("Show node") { workspace.showPodNode(row) }
         }
+        Divider()
+        Button(workspace.isTerminatingPod(row) ? "Termination requested" : "Terminate Pod…", role: .destructive) {
+            workspace.requestPodTermination(row)
+        }
+        .disabled(!workspace.canTerminatePod(row))
     }
 }
 
@@ -353,6 +358,10 @@ struct PodInspector: View {
                 IconAction(symbol: "terminal", title: "Open terminal") { workspace.openPodTerminal(row) }
                     .disabled(row.runningContainerNames.isEmpty)
                 IconAction(symbol: "doc.on.doc", title: "Copy namespace/name") { copyPodNames([row]) }
+                IconAction(symbol: "trash", title: workspace.isTerminatingPod(row) ? "Termination requested" : "Terminate Pod…") {
+                    workspace.requestPodTermination(row)
+                }
+                .disabled(!workspace.canTerminatePod(row))
                 IconAction(symbol: "xmark", title: "Close pod details", action: onClose)
             }
             .padding(.leading, 14).padding(.trailing, 6).frame(height: 43)
@@ -367,9 +376,9 @@ struct PodInspector: View {
                         properties
                     }
                     .padding(14)
-                    if let containers = row.pod?.containers, !containers.isEmpty {
+                    if let containers = row.pod?.containers, !containers.isEmpty, let context = workspace.connectedContext {
                         Divider()
-                        containerList(containers)
+                        PodInspectedContainers(context: context, row: row, containers: containers).id(context)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -437,7 +446,7 @@ struct PodInspector: View {
             field("Namespace") { PodLink(value: ns, wraps: true) { workspace.showNamespace(of: row) } }
         }
         if let pod = row.pod {
-            metadata("Labels", count: pod.labels.count, expanded: $labelsExpanded) {
+            metadata("Pod labels", count: pod.labels.count, expanded: $labelsExpanded) {
                 ForEach(pod.labels.keys.sorted(), id: \.self) { key in
                     Text(verbatim: key + "=" + (pod.labels[key] ?? ""))
                 }
@@ -518,26 +527,116 @@ struct PodInspector: View {
             }
         }
     }
+}
 
-    private func containerList(_ containers: [PodContainer]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            heading("Containers").padding(.bottom, 7)
+private struct PodInspectedContainers: View {
+    let context: ContextID
+    let row: ResourceRow
+    let containers: [PodContainer]
+
+    @State private var expanded: Set<String>
+    @State private var result: Result<PodInspection, Error>?
+    @State private var attempt = 0
+
+    init(context: ContextID, row: ResourceRow, containers: [PodContainer]) {
+        self.context = context
+        self.row = row
+        self.containers = containers
+        _expanded = State(initialValue: Set(containers.prefix(1).map(\.name)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Containers").font(.system(size: 15, weight: .semibold)).accessibilityAddTraits(.isHeader)
             ForEach(containers, id: \.name) { container in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Circle().fill(container.color).frame(width: 7, height: 7)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(verbatim: container.name).fontWeight(.medium).textSelection(.enabled)
-                        Text(verbatim: container.roleText + " · " + container.stateText)
-                            .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                DisclosureGroup(isExpanded: Binding(get: { expanded.contains(container.name) }, set: { show in
+                    if show { expanded.insert(container.name) } else { expanded.remove(container.name) }
+                })) {
+                    details(for: container)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                } label: {
+                    HStack(spacing: 6) {
+                        Circle().fill(container.color).frame(width: 7, height: 7)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(verbatim: container.name).fontWeight(.medium)
+                            Text(verbatim: container.roleText + " · " + container.stateText)
+                                .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                        }
+                        Spacer(minLength: 2)
+                        Text(container.restartCount.formatted() + (container.restartCount == 1 ? " restart" : " restarts"))
+                            .font(.system(size: 10.5)).foregroundStyle(Palette.muted)
                     }
-                    Spacer(minLength: 0)
-                    Text("\(container.restartCount) " + (container.restartCount == 1 ? "restart" : "restarts"))
-                        .font(.system(size: 10.5)).foregroundStyle(Palette.muted).fixedSize()
+                    .contentShape(Rectangle())
                 }
-                .padding(.vertical, 8)
                 Divider()
             }
         }
         .padding(14)
+        .modifier(ResourceDetailRead(version: row.resourceVersion, attempt: attempt, load: {
+            try await KubernetesClient().inspectPod(for: row, in: context.file, context: context.name)
+        }, receive: { response in
+            result = response
+        }))
+    }
+
+    @ViewBuilder private func details(for container: PodContainer) -> some View {
+        if let result {
+            switch result {
+            case .success(let inspection):
+                if let info = inspection.containers[container.name] {
+                    ContainerProperties(info: info)
+                } else {
+                    Text("Container details unavailable").foregroundStyle(Palette.muted)
+                }
+            case .failure(let error):
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(error.localizedDescription).foregroundStyle(Palette.muted)
+                    Button("Retry") { attempt += 1 }.controlSize(.small)
+                }
+            }
+        } else {
+            ProgressView("Loading container details…").controlSize(.small)
+        }
+    }
+}
+
+private struct ContainerProperties: View {
+    let info: PodContainerInspection
+    @State private var showEnvironment = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(Array(info.properties.enumerated()), id: \.offset) { _, field in
+                labeledValue(field.name, field.value)
+            }
+            if !info.environment.isEmpty || !info.environmentFrom.isEmpty {
+                DisclosureGroup("Environment", isExpanded: $showEnvironment) {
+                    VStack(alignment: .leading, spacing: 9) {
+                        ForEach(Array(info.environmentFrom.enumerated()), id: \.offset) { _, source in
+                            labeledValue("Import all keys", source)
+                        }
+                        ForEach(Array(info.environment.enumerated()), id: \.offset) { _, variable in
+                            labeledValue(variable.name, variable.value)
+                        }
+                    }
+                    .padding(.top, 5).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func labeledValue(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(verbatim: label).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.muted)
+            if value.isEmpty {
+                Text("Empty value").foregroundStyle(Palette.muted)
+            } else if value.utf8.count > 2048 || value.prefix(2048).filter({ $0 == "\n" }).count > 8 {
+                ScrollableConfigValue(value: value, key: label).frame(height: 120)
+            } else {
+                Text(verbatim: value).font(.system(size: 11.5, design: .monospaced))
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }

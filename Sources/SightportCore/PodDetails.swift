@@ -37,11 +37,13 @@ public struct PodDetails: Hashable, Sendable {
     public let node: String?
     public let qos: String?
     public let status: String
+    public let isTerminating: Bool
     public let warning: String?
     public private(set) var podIPs: [String] = []
     public private(set) var serviceAccount: String?
     public private(set) var labels: [String: String] = [:]
     public private(set) var annotationKeys: [String] = []
+    private(set) var resourceVersion: String?
 
     public var restartCount: Int { containers.reduce(0) { $0 + $1.restartCount } }
     public var readinessContainerCount: Int { containers.filter(\.countsTowardReadiness).count }
@@ -53,6 +55,7 @@ public struct PodDetails: Hashable, Sendable {
         func scalar(_ path: String) -> String { "{{if ne \(path) nil}}{{urlquery \(path)}}{{end}}" }
         var output = ["pod", scalar(".status.qosClass"), scalar(".metadata.deletionTimestamp"), scalar(".status.reason")]
             .joined(separator: ",")
+        output += "{{with .metadata.resourceVersion}}|version,{{urlquery .}}{{end}}"
         output += "{{with .status.podIP}}|ip,{{urlquery .}}{{end}}{{range .status.podIPs}}{{with .ip}}|ip,{{urlquery .}}{{end}}{{end}}"
         output += "{{with .spec.serviceAccountName}}|account,{{urlquery .}}{{end}}"
         output += "{{range $key, $value := .metadata.labels}}|label,{{urlquery $key}},{{urlquery $value}}{{end}}"
@@ -83,6 +86,7 @@ public struct PodDetails: Hashable, Sendable {
         guard let heading = try records.next()?.split(separator: ",", omittingEmptySubsequences: false).map(unescapeResourceField),
               heading.count == 4, heading[0] == "pod" else { throw ResourceReadError.invalidList }
         self.qos = heading[1].nonEmpty
+        isTerminating = !heading[2].isEmpty
         self.node = node.nonEmpty
         var owner: (version: String, kind: String, name: String, uid: String)?
         var schedulingFailure: String?
@@ -92,6 +96,8 @@ public struct PodDetails: Hashable, Sendable {
         while let record = records.next() {
             let parts = try record.split(separator: ",", omittingEmptySubsequences: false).map(unescapeResourceField)
             switch parts.first {
+            case "version" where parts.count == 2:
+                resourceVersion = parts[1].nonEmpty
             case "ip" where parts.count == 2 && !parts[1].isEmpty:
                 if !podIPs.contains(parts[1]) { podIPs.append(parts[1]) }
             case "account" where parts.count == 2:
@@ -142,7 +148,7 @@ public struct PodDetails: Hashable, Sendable {
             return kind
         }
         (status, warning) = Self.health(phase: phase, ready: ready, reason: heading[3].nonEmpty,
-                                        deleting: !heading[2].isEmpty, schedulingFailure: schedulingFailure,
+                                        deleting: isTerminating, schedulingFailure: schedulingFailure,
                                         initialized: initialized, containers: containers)
     }
 

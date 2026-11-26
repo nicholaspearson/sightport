@@ -59,7 +59,7 @@ func rawGet(ctx context.Context, cfg *rest.Config, path string, out io.Writer) e
 	if err != nil {
 		return err
 	}
-	body, err := client.Get().RequestURI(path).Stream(ctx)
+	body, err := client.Get().RequestURI(path).SetHeader("Accept", "application/json").Stream(ctx)
 	if err != nil {
 		return err
 	}

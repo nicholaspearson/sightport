@@ -5,26 +5,26 @@ struct WorkbenchRail: View {
     @EnvironmentObject private var workspace: Workspace
 
     var body: some View {
-        let contexts = discoveredContexts
-        let favorites = workspace.favorites.sorted(by: Self.precedes)
-        let others = contexts.subtracting(workspace.favorites).sorted(by: Self.precedes)
+        let connected = workspace.connectedContext
+        let favorites = workspace.favorites.filter { $0 != connected }.sorted(by: Self.precedes)
         VStack(spacing: 0) {
-            SightportMark().frame(width: 29, height: 29).padding(.vertical, 11)
+            Button { workspace.open(.contexts) } label: {
+                VStack(spacing: 4) {
+                    SightportMark().frame(width: 29, height: 29)
+                    Text("Contexts").font(.system(size: 9.5)).foregroundStyle(Palette.muted)
+                }
+                .padding(.vertical, 8).frame(maxWidth: .infinity).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).help("Browse all contexts").accessibilityLabel("Browse all contexts")
             rule
             ScrollView {
                 LazyVStack(spacing: 5) {
-                    ForEach(favorites + others, id: \.self) { id in
-                        VStack(spacing: 5) {
-                            if !favorites.isEmpty && id == others.first {
-                                rule.padding(.vertical, 4)
-                            }
-                            ContextRailButton(id: id, available: contexts.contains(id))
-                        }
+                    if let connected {
+                        ContextRailButton(id: connected, available: workspace.context(for: connected) != nil)
+                        if !favorites.isEmpty { rule.padding(.vertical, 4) }
                     }
-                    if favorites.isEmpty && others.isEmpty {
-                        Text(workspace.loading ? "Loading…" : "No contexts")
-                            .font(.system(size: 10)).foregroundStyle(Palette.muted)
-                            .multilineTextAlignment(.center).padding(.horizontal, 5).padding(.vertical, 8)
+                    ForEach(favorites, id: \.self) { id in
+                        ContextRailButton(id: id, available: workspace.context(for: id) != nil)
                     }
                 }
                 .padding(.vertical, 10)
@@ -39,12 +39,6 @@ struct WorkbenchRail: View {
     }
 
     private var rule: some View { Rectangle().fill(Palette.line).frame(height: 1).padding(.horizontal, 12) }
-
-    private var discoveredContexts: Set<ContextID> {
-        Set(workspace.sources.flatMap { source in
-            source.contexts.map { ContextID(file: source.url, name: $0.name) }
-        })
-    }
 
     private static func precedes(_ lhs: ContextID, _ rhs: ContextID) -> Bool {
         let order = lhs.name.localizedStandardCompare(rhs.name)
@@ -62,7 +56,7 @@ private struct ContextRailButton: View {
         if case .cluster = workspace.page { return workspace.connectedContext == id }
         return workspace.selection == .context(id.file, id.name)
     }
-    private var active: Bool { workspace.activeContext == id }
+    private var connected: Bool { workspace.connectedContext == id }
     private var favorite: Bool { workspace.favorites.contains(id) }
 
     // EKS names end in “cluster/name” and kubeadm uses “user@cluster”.
@@ -100,7 +94,7 @@ private struct ContextRailButton: View {
     private var accessibilityStatus: String {
         var parts = [displayPath(id.file)]
         if favorite { parts.append("Favorite") }
-        if active { parts.append("Active context") }
+        if connected { parts.append("Connected") }
         if workspace.checks[id] == .checking { parts.append("Connecting") }
         if let failure { parts.append(failure) }
         return parts.joined(separator: ", ")
@@ -141,7 +135,7 @@ private struct ContextRailButton: View {
                         Image(systemName: "exclamationmark.circle.fill").font(.system(size: 11))
                             .foregroundStyle(.orange).padding(1)
                             .background(Palette.sidebar, in: Circle()).offset(x: 3, y: 3)
-                    } else if active && workspace.checks[id] == .reachable {
+                    } else if connected {
                         Image(systemName: "checkmark.circle.fill").font(.system(size: 10))
                             .foregroundStyle(Palette.forest).padding(1)
                             .background(Palette.sidebar, in: Circle()).offset(x: 3, y: 3)
@@ -166,8 +160,11 @@ private struct ContextRailButton: View {
         .accessibilityValue(accessibilityStatus)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .contextMenu {
+            ContextConnectionMenuAction(workspace: workspace, id: id)
             Button("Inspect context") { workspace.inspect(id) }
             Button(favorite ? "Remove from favorites" : "Add to favorites") { workspace.toggleFavorite(id) }
+            Divider()
+            Button("Remove from Sightport…", role: .destructive) { workspace.requestContextRemoval(id) }
         }
     }
 }
@@ -182,6 +179,7 @@ struct WorkbenchNavigator: View {
     @EnvironmentObject private var workspace: Workspace
     @State private var collectionsExpanded = true
     @State private var expanded: Set<NavigatorGroup> = [.argoSettings]
+    @State private var expandedAPIGroups: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -226,8 +224,9 @@ struct WorkbenchNavigator: View {
         .background(Palette.surface)
         .onChange(of: workspace.connectedContext) { _, context in
             collectionsExpanded = context == nil
+            expandedAPIGroups.removeAll()
         }
-        .onChange(of: workspace.page) { _, page in
+        .onChange(of: workspace.page, initial: true) { _, page in
             guard case .cluster(let section) = page else {
                 collectionsExpanded = true
                 return
@@ -237,7 +236,9 @@ struct WorkbenchNavigator: View {
             case .argoDashboard: expanded.insert(.argo)
             case .portForwarding: expanded.insert(.network)
             case .helmReleases: expanded.insert(.helm)
-            case .customResources: expanded.insert(.custom)
+            case .customResources(let type):
+                expanded.insert(.custom)
+                expandedAPIGroups.insert(type.group)
             case .resources(let kind):
                 if ResourceKind.workloads.contains(kind) { expanded.insert(.workloads) }
                 if ResourceKind.configuration.contains(kind) { expanded.insert(.config) }
@@ -251,6 +252,10 @@ struct WorkbenchNavigator: View {
                 if kind == .customResourceDefinitions { expanded.insert(.custom) }
             }
         }
+        .onChange(of: expanded.contains(.custom) && workspace.connectedContext != nil, initial: true) { _, visible in
+            workspace.setCustomResourceCatalogVisible(visible)
+        }
+        .onDisappear { workspace.setCustomResourceCatalogVisible(false) }
     }
 
     @ViewBuilder private func clusterNavigation(_ context: ContextID) -> some View {
@@ -282,15 +287,7 @@ struct WorkbenchNavigator: View {
         if expanded.contains(.helm) { clusterRow(.helmReleases, title: "Releases") }
         group(.access, symbol: "shield.lefthalf.filled")
         if expanded.contains(.access) { resourceRows(ResourceKind.accessControl) }
-        group(.custom, symbol: "puzzlepiece.extension")
-        if expanded.contains(.custom) {
-            clusterRow(.resources(.customResourceDefinitions), title: "Definitions")
-            ForEach(workspace.tabs, id: \.self) { tab in
-                if case .cluster(.customResources(let type)) = tab {
-                    clusterRow(.customResources(type), title: type.kind).help(type.resourceName)
-                }
-            }
-        }
+        customResourceNavigation
         group(.argo, symbol: "arrow.triangle.2.circlepath")
         if expanded.contains(.argo) {
             clusterRow(.argoDashboard, title: "Dashboard")
@@ -301,6 +298,41 @@ struct WorkbenchNavigator: View {
         }
         group(.karpenter, symbol: "square.3.layers.3d")
         if expanded.contains(.karpenter) { resourceRows(ResourceKind.karpenter) }
+    }
+
+    @ViewBuilder private var customResourceNavigation: some View {
+        group(.custom, symbol: "puzzlepiece.extension")
+        if expanded.contains(.custom) {
+            clusterRow(.resources(.customResourceDefinitions), title: "Definitions")
+            ForEach(workspace.customResourceGroups) { apiGroup in
+                let isExpanded = expandedAPIGroups.contains(apiGroup.name)
+                disclosure(apiGroup.name, isExpanded: isExpanded) {
+                    if isExpanded { expandedAPIGroups.remove(apiGroup.name) }
+                    else { expandedAPIGroups.insert(apiGroup.name) }
+                }
+                .padding(.leading, 16)
+                .help(apiGroup.name)
+                if isExpanded {
+                    ForEach(apiGroup.types, id: \.resourceName) { type in
+                        clusterRow(.customResources(type), title: type.kind)
+                            .padding(.leading, 23).help(type.resourceName)
+                    }
+                }
+            }
+            if let error = workspace.customResourceCatalogError {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                    Text("Couldn’t load API groups").lineLimit(1)
+                    Button("Retry") { workspace.refreshCustomResourceCatalog() }.buttonStyle(.link)
+                }
+                .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                .padding(.leading, 24).frame(minHeight: 24).help(error)
+            } else if workspace.customResourceGroups.isEmpty {
+                Text(workspace.customResourceCatalogLoading ? "Loading API groups…" : "No custom resource definitions")
+                    .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    .padding(.leading, 24).frame(minHeight: 24)
+            }
+        }
     }
 
     @ViewBuilder private var networkNavigation: some View {
@@ -325,20 +357,25 @@ struct WorkbenchNavigator: View {
 
     private func group(_ group: NavigatorGroup, symbol: String) -> some View {
         let isExpanded = expanded.contains(group)
-        return Button {
+        return disclosure(group.rawValue, symbol: symbol, isExpanded: isExpanded) {
             if isExpanded { expanded.remove(group) } else { expanded.insert(group) }
-        } label: {
+        }
+    }
+
+    private func disclosure(_ title: String, symbol: String? = nil, isExpanded: Bool,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 9, weight: .semibold)).frame(width: 9)
-                Image(systemName: symbol).font(.system(size: 12)).frame(width: 15)
-                Text(group.rawValue).font(.system(size: 12, weight: .medium))
+                if let symbol { Image(systemName: symbol).font(.system(size: 12)).frame(width: 15) }
+                Text(verbatim: title).font(.system(size: 12, weight: .medium)).lineLimit(1)
                 Spacer(minLength: 0)
             }
             .foregroundStyle(Palette.ink).padding(.horizontal, 10).frame(height: 28)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain).accessibilityLabel(group.rawValue)
+        .buttonStyle(.plain).accessibilityLabel(title)
         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
     }
 

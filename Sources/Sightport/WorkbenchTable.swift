@@ -160,7 +160,7 @@ private struct RecordTable: View {
     private func nativeTable(_ rows: [WorkbenchRecord]) -> some View {
         // AppKit can retain and update cells after their SwiftUI table has left the hierarchy.
         let workspace = self.workspace
-        let activeContext = workspace.activeContext
+        let connectedContext = workspace.connectedContext
         let loading = workspace.loading
         let selection = Binding<WorkbenchItem?>(
             get: { workspace.selection },
@@ -170,7 +170,8 @@ private struct RecordTable: View {
         )
         return Table(rows, selection: selection, sortOrder: $sort) {
             TableColumn("Name", value: \.name) { row in
-                RecordName(record: row, activeContext: activeContext)
+                RecordName(record: row, connectedContext: connectedContext)
+                    .background(TableRowHover().accessibilityHidden(true))
             }.width(min: 120, ideal: 235)
             TableColumn(page == .files ? "Location" : "Cluster", value: \.detail) { row in
                 cell(row.detail)
@@ -191,7 +192,8 @@ private struct RecordTable: View {
                     cell(row.sourcePath)
                 }
             }.width(min: 76, ideal: 117)
-            TableColumn("") { row in RecordActions(workspace: workspace, record: row) }.width(28)
+            TableColumn("") { row in RecordActions(workspace: workspace, record: row) }
+                .width(page == .files ? 28 : 52)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: false))
         .scrollContentBackground(.hidden)
@@ -240,7 +242,7 @@ private struct RecordTable: View {
                     }
                 } else {
                     emptyMessage("No contexts to display", symbol: "helm") {
-                        Button("Open another kubeconfig…") { workspace.chooseFile() }
+                        Button("Open kubeconfig…") { workspace.chooseFile() }
                     }
                 }
             }

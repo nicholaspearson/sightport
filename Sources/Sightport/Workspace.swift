@@ -92,8 +92,29 @@ struct SourceFile: Identifiable {
 }
 
 struct WorkspaceAlert: Identifiable {
+    enum Action {
+        case terminatePod(PodTerminationRequest)
+        case removeContext(ContextID)
+    }
+
     let id = UUID()
     let message: String
+    var action: Action?
+}
+
+struct PodTerminationRequest: Identifiable {
+    let id = UUID()
+    let context: ContextID
+    let row: ResourceRow
+    let namespace: String
+
+    var confirmation: String {
+        var text = "Kubernetes will terminate \(namespace)/\(row.name) in context \(context.name) using the pod’s configured grace period."
+        if let kind = row.pod?.controllerKind, let owner = row.pod?.controllerName {
+            text += "\n\nIts controller (\(kind)/\(owner)) may create a replacement."
+        }
+        return text
+    }
 }
 
 struct PodLogTarget: Identifiable {
@@ -145,6 +166,9 @@ final class Workspace: ObservableObject {
     @Published private(set) var namespaceNames: [String] = []
     @Published private(set) var namespaceError: String?
     @Published private(set) var namespaceFilter: String?
+    @Published private(set) var customResourceGroups: [CustomResourceGroup] = []
+    @Published private(set) var customResourceCatalogError: String?
+    @Published private(set) var customResourceCatalogLoading = false
     @Published private(set) var overview: [ResourceKind: WorkloadCount] = [:]
     @Published private(set) var podMetrics: [PodKey: PodUsage] = [:]
     @Published private(set) var podMetricsLoading = false
@@ -153,6 +177,7 @@ final class Workspace: ObservableObject {
     @Published private(set) var podTerminals: [PodTerminalTab] = []
     @Published private(set) var activeDrawerTab: PodDrawerTab?
     @Published private(set) var podDrawerCollapsed = false
+    @Published private var terminatingPods: [String: PodTerminationRequest] = [:]
 
     func selectedResource(in kind: ResourceKind) -> ResourceRow? {
         guard page == .cluster(.resources(kind)), case .resource(let id) = selection else { return nil }
@@ -164,12 +189,15 @@ final class Workspace: ObservableObject {
     private var metricsTask: Task<Void, Never>?
     private var linkedResource: LinkedResource?
     private var namespaceTask: Task<Void, Never>?
+    private var customResourceCatalogVisible = false
+    private var customResourceCatalogTask: Task<Void, Never>?
 
     private let repository = ContextPreferencesRepository()
     private let client = KubernetesClient()
     private let defaults = UserDefaults.standard
     private var tabSelections: [WorkbenchPage: WorkbenchItem] = [:]
     private var rememberedContext: ContextID?
+    private var removedContexts: Set<ContextID> = []
     private var readTask: Task<Void, Never>?
     private var connectTask: Task<Void, Never>?
     private var pendingConnection: ContextID?
@@ -183,6 +211,7 @@ final class Workspace: ObservableObject {
             let preferences = try loadPreferences()
             favorites = preferences.favorites
             rememberedContext = preferences.activeContext
+            removedContexts = preferences.removedContexts
         } catch {
             alert = WorkspaceAlert(message: "Could not load context preferences. " + error.localizedDescription)
         }
@@ -198,7 +227,10 @@ final class Workspace: ObservableObject {
         if case .cluster = destination, connectedContext == nil { return }
         if !tabs.contains(destination) { tabs.append(destination) }
         guard page != destination else { return }
-        if page == .cluster(.resources(.pods)) { closePodLogs() }
+        if page == .cluster(.resources(.pods)) {
+            dismissPodTerminationPrompt()
+            closePodLogs()
+        }
         if page.configDataKind != nil { select(nil) }
         page = destination
         if case .cluster(let section) = destination {
@@ -207,6 +239,7 @@ final class Workspace: ObservableObject {
             clearResourceTable()
             restoreSelection()
         }
+        updateCustomResourceObservation()
     }
 
     func close(_ tab: WorkbenchPage) {
@@ -279,16 +312,51 @@ final class Workspace: ObservableObject {
         if page == .favorites { restoreSelection() }
     }
 
+    func disconnect(_ id: ContextID) {
+        if pendingConnection == id { cancelConnectionAttempt() }
+        guard connectedContext == id else { return }
+        checks.removeValue(forKey: id)
+        endCluster()
+    }
+
+    func requestContextRemoval(_ id: ContextID) {
+        guard context(for: id) != nil || favorites.contains(id) || connectedContext == id else { return }
+        var message = "Remove “\(id.name)” from this workspace?"
+        if connectedContext == id {
+            message += " Its cluster tabs, terminals, and port forwards will close."
+        }
+        message += "\n\nTo add it again, reopen its kubeconfig with Open Kubeconfig…\n\(displayPath(id.file))"
+        alert = WorkspaceAlert(message: message, action: .removeContext(id))
+    }
+
+    func confirmContextRemoval(_ id: ContextID) {
+        guard updatePreferences({ $0.removeContext(id) }) else { return }
+        if pendingConnection == id { cancelConnectionAttempt() }
+        if rememberedContext == id { rememberedContext = nil }
+        if activeContext == id { activeContext = nil }
+        checks.removeValue(forKey: id)
+        if let index = sources.firstIndex(where: { $0.url == id.file }) {
+            sources[index].contexts.removeAll { $0.name == id.name }
+        }
+        tabSelections = tabSelections.filter { $0.value != .context(id.file, id.name) }
+        if connectedContext == id { endCluster() }
+        if selection == .context(id.file, id.name) { restoreSelection() }
+    }
+
     // Re-read before writing so a failed or unreadable migration can be retried
     // without replacing the user's existing preferences with empty defaults.
-    private func updatePreferences(_ change: (inout ContextPreferences) -> Void) {
+    @discardableResult
+    private func updatePreferences(_ change: (inout ContextPreferences) -> Void) -> Bool {
         do {
             var next = try loadPreferences()
             change(&next)
             try repository.save(next)
             favorites = next.favorites
+            removedContexts = next.removedContexts
+            return true
         } catch {
             alert = WorkspaceAlert(message: "Could not save context preferences. " + error.localizedDescription)
+            return false
         }
     }
 
@@ -367,7 +435,10 @@ final class Workspace: ObservableObject {
         readTask = Task {
             for file in files {
                 var source = SourceFile(url: file)
-                do { source.contexts = try await client.contexts(in: file) }
+                do {
+                    let contexts = try await client.contexts(in: file)
+                    source.contexts = contexts.filter { !removedContexts.contains(ContextID(file: file, name: $0.name)) }
+                }
                 catch { source.error = error.localizedDescription }
                 guard !Task.isCancelled else { return }
                 if let index = sources.firstIndex(where: { $0.url == file }) { sources[index] = source }
@@ -399,7 +470,14 @@ final class Workspace: ObservableObject {
         panel.showsHiddenFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url?.standardizedFileURL else { return }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openKubeconfig(url)
+    }
+
+    func openKubeconfig(_ file: URL) {
+        let url = file.standardizedFileURL
+        if removedContexts.contains(where: { $0.file == url }),
+           !updatePreferences({ $0.restoreContexts(in: url) }) { return }
         if !client.defaultSources().map(\.standardizedFileURL).contains(url), !otherPaths.contains(url.path) {
             defaults.set(otherPaths + [url.path], forKey: "sourceFiles")
         }
@@ -432,6 +510,10 @@ extension Workspace {
     }
 
     private func endCluster() {
+        stopCustomResourceObservation()
+        applyCustomResourceCatalog([])
+        dismissPodTerminationPrompt()
+        terminatingPods.removeAll()
         portForwards.stopAll()
         closePodLogs()
         closePodTerminals()
@@ -454,6 +536,7 @@ extension Workspace {
         let value = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let scope = value?.isEmpty == true ? nil : value
         guard connectedContext != nil, scope != namespaceFilter else { return }
+        dismissPodTerminationPrompt()
         if page.configDataKind != nil { select(nil) }
         if let scope, let target = podLogTarget, target.namespace != scope { closePodLogs() }
         namespaceFilter = scope
@@ -466,6 +549,7 @@ extension Workspace {
         guard case .cluster(let section) = page else { return }
         detailRefreshID &+= 1
         loadSection(section, refresh: true)
+        if section == .resources(.customResourceDefinitions) { updateCustomResourceObservation() }
     }
 
     func setWindowVisible(_ visible: Bool) {
@@ -476,6 +560,63 @@ extension Workspace {
         } else if !visible {
             stopResourceReads()
         }
+        updateCustomResourceObservation()
+    }
+
+    func setCustomResourceCatalogVisible(_ visible: Bool) {
+        guard customResourceCatalogVisible != visible else { return }
+        customResourceCatalogVisible = visible
+        updateCustomResourceObservation()
+    }
+
+    func refreshCustomResourceCatalog() {
+        if page == .cluster(.resources(.customResourceDefinitions)) {
+            reloadResources()
+        } else {
+            stopCustomResourceObservation()
+            updateCustomResourceObservation()
+        }
+    }
+
+    private func stopCustomResourceObservation() {
+        customResourceCatalogTask?.cancel()
+        customResourceCatalogTask = nil
+    }
+
+    private func updateCustomResourceObservation() {
+        guard customResourceCatalogVisible, windowVisible, let context = connectedContext else {
+            stopCustomResourceObservation()
+            return
+        }
+        let definitions = ClusterSection.resources(.customResourceDefinitions)
+        if page == .cluster(definitions) {
+            // The Definitions table already follows this collection.
+            stopCustomResourceObservation()
+            if resourceLoading {
+                customResourceCatalogLoading = true
+                customResourceCatalogError = nil
+            } else {
+                applyCustomResourceCatalog(rows, error: resourceError)
+            }
+            return
+        }
+        guard customResourceCatalogTask == nil else { return }
+        customResourceCatalogLoading = customResourceGroups.isEmpty
+        customResourceCatalogError = nil
+        customResourceCatalogTask = Task {
+            await observeRows(definitions, in: context, scope: nil, followsTable: false, onRows: {
+                self.applyCustomResourceCatalog($0)
+            }, onError: {
+                self.applyCustomResourceCatalog([], error: $0.localizedDescription)
+            })
+        }
+    }
+
+    private func applyCustomResourceCatalog(_ definitions: [ResourceRow], error: String? = nil) {
+        let groups = CustomResourceGroup.catalog(from: definitions)
+        if groups != customResourceGroups { customResourceGroups = groups }
+        if customResourceCatalogError != error { customResourceCatalogError = error }
+        if customResourceCatalogLoading { customResourceCatalogLoading = false }
     }
 
     private func stopResourceReads() {
@@ -542,10 +683,16 @@ extension Workspace {
                     self.selection = nil
                     self.resourceError = error.localizedDescription
                     self.resourceLoading = false
-                    if section == .resources(.pods) { self.closePodLogs() }
+                    if section == .resources(.pods) {
+                        self.dismissPodTerminationPrompt()
+                        self.closePodLogs()
+                    }
                     if section == .resources(.namespaces) {
                         self.namespaceError = error.localizedDescription
                         self.namespaceNames = []
+                    }
+                    if section == .resources(.customResourceDefinitions) {
+                        self.applyCustomResourceCatalog([], error: error.localizedDescription)
                     }
                 }, onPolling: { polling in
                     if self.pollingAfterWatchFailure != polling { self.pollingAfterWatchFailure = polling }
@@ -554,7 +701,7 @@ extension Workspace {
         }
     }
 
-    private func observeRows(_ section: ClusterSection, in id: ContextID, scope: String?,
+    private func observeRows(_ section: ClusterSection, in id: ContextID, scope: String?, followsTable: Bool = true,
                              onRows: @escaping @MainActor ([ResourceRow]) -> Void,
                              onError: @escaping @MainActor (Error) -> Void,
                              onPolling: @escaping @MainActor (Bool) -> Void = { _ in }) async {
@@ -571,7 +718,8 @@ extension Workspace {
                 do {
                     try await client.watchResources(target, in: id.file, context: id.name, namespace: scope) { rows in
                         await MainActor.run {
-                            guard !Task.isCancelled, self.resourceGeneration == generation else { return }
+                            guard !Task.isCancelled, self.connectedContext == id,
+                                  !followsTable || self.resourceGeneration == generation else { return }
                             onPolling(false)
                             onRows(rows)
                         }
@@ -627,7 +775,19 @@ extension Workspace {
             select(nil)
         }
         if section == .resources(.namespaces) { updateNamespaces(result) }
+        if section == .resources(.customResourceDefinitions) { applyCustomResourceCatalog(result) }
         guard section == .resources(.pods) else { return }
+        if case .terminatePod(let request) = alert?.action,
+           !result.contains(where: { $0.id == request.row.id && $0.pod?.isTerminating == false }) {
+            dismissPodTerminationPrompt()
+        }
+        if !terminatingPods.isEmpty {
+            let remaining = Set(result.filter { $0.pod?.isTerminating == false }.map(\.id))
+            let finished = terminatingPods.filter { id, request in
+                (namespace == nil || namespace == request.namespace) && !remaining.contains(id)
+            }
+            for id in finished.keys { terminatingPods.removeValue(forKey: id) }
+        }
         for terminal in podTerminals where namespace == nil || terminal.namespace == namespace {
             let pod = result.first { $0.id == terminal.podID }
             terminal.updateContainers(pod?.runningContainerNames ?? [])
@@ -673,6 +833,43 @@ extension Workspace {
     func inspectPod(_ row: ResourceRow) {
         guard isVisiblePod(row) else { return }
         select(.resource(row.id))
+    }
+
+    func isTerminatingPod(_ row: ResourceRow) -> Bool {
+        row.pod?.isTerminating == true || terminatingPods[row.id] != nil
+    }
+
+    func canTerminatePod(_ row: ResourceRow) -> Bool {
+        row.pod != nil && row.namespace?.isEmpty == false && !row.id.isEmpty
+            && !row.id.contains("/") && !isTerminatingPod(row)
+    }
+
+    func requestPodTermination(_ row: ResourceRow) {
+        guard let context = connectedContext, isVisiblePod(row), canTerminatePod(row),
+              let namespace = row.namespace else { return }
+        let request = PodTerminationRequest(context: context, row: row, namespace: namespace)
+        alert = WorkspaceAlert(message: request.confirmation, action: .terminatePod(request))
+    }
+
+    private func dismissPodTerminationPrompt() {
+        if case .terminatePod = alert?.action { alert = nil }
+    }
+
+    func confirmPodTermination(_ request: PodTerminationRequest) {
+        guard connectedContext == request.context, page == .cluster(.resources(.pods)) else { return }
+        let row = request.row
+        guard let current = rows.first(where: { $0.id == row.id && $0.name == row.name && $0.namespace == request.namespace }),
+              canTerminatePod(current) else { return }
+        terminatingPods[row.id] = request
+        Task {
+            do {
+                try await client.terminatePod(row, in: request.context.file, context: request.context.name)
+            } catch {
+                guard connectedContext == request.context else { return }
+                if terminatingPods[row.id]?.id == request.id { terminatingPods.removeValue(forKey: row.id) }
+                alert = WorkspaceAlert(message: "\(request.namespace)/\(row.name) · \(request.context.name)\n\n\(error.localizedDescription)")
+            }
+        }
     }
 
     func openPodLogs(_ row: ResourceRow) {

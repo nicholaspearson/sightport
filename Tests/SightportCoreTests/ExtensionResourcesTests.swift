@@ -49,6 +49,45 @@ final class ExtensionResourcesTests: XCTestCase {
         XCTAssertEqual(definition()?.version, "v1beta1")
     }
 
+    func testCatalogGroupsDefinitionsByAPIGroupAndUsesServedStorageVersion() throws {
+        func document(_ group: String, _ plural: String, _ kind: String, scope: String = "Namespaced",
+                      storageServed: Bool = true) -> [String: Any] {
+            ["metadata": ["name": plural + "." + group], "spec": [
+                "group": group, "scope": scope, "names": ["kind": kind, "plural": plural],
+                "versions": [["name": "v1beta1", "served": true, "storage": false],
+                             ["name": "v1", "served": storageServed, "storage": true]]
+            ]]
+        }
+        let rows = try projectResource(.customResourceDefinitions, items: [
+            document("z.example", "widgets", "Widget"),
+            document("a.example", "widgets", "Widget", storageServed: false),
+            document("a.example", "gadgets", "Gadget", scope: "Cluster")
+        ])
+        let catalog = CustomResourceGroup.catalog(from: rows)
+        XCTAssertEqual(catalog.map(\.name), ["a.example", "z.example"])
+        XCTAssertEqual(catalog[0].types.map(\.kind), ["Gadget", "Widget"])
+        XCTAssertEqual(catalog[0].types.map(\.isNamespaced), [false, true])
+        XCTAssertEqual(catalog[0].types.map(\.version), ["v1", "v1beta1"])
+        XCTAssertEqual(catalog[1].types.first?.versionedName, "widgets.v1.z.example")
+        XCTAssertEqual(CustomResourceGroup.catalog(from: [rows[0]]).map(\.name), ["z.example"])
+    }
+
+    func testCatalogSkipsInvalidAndUnestablishedTypesAndPrefersNewestIncarnation() {
+        func row(_ id: String, _ name: String, _ kind: String, timestamp: TimeInterval, established: String = "True") -> ResourceRow {
+            let fields = ["Kind": kind, "Group": "example.org", "Scope": "Namespaced", "Served Versions": "v1",
+                          "Established": established, "Storage Version": "v1"]
+            return ResourceRow(id: id, name: name, namespace: nil, createdAt: Date(timeIntervalSince1970: timestamp),
+                               values: ResourceKind.customResourceDefinitions.columns.map { fields[$0] ?? "" })
+        }
+        let old = row("old", "workers.example.org", "OldWorker", timestamp: 100)
+        let new = row("new", "workers.example.org", "Worker", timestamp: 200)
+        let invalid = row("invalid", "other.example.org", "Malformed\nKind", timestamp: 300)
+        let pending = row("pending", "jobs.example.org", "Job", timestamp: 400, established: "False")
+        let catalog = CustomResourceGroup.catalog(from: [new, invalid, pending, old])
+        XCTAssertEqual(catalog.flatMap(\.types).map(\.kind), ["Worker"])
+        XCTAssertTrue(CustomResourceGroup.catalog(from: []).isEmpty)
+    }
+
     func testQueriesSelectedServedVersionAndCorrectScope() async throws {
         let stub = #"printf 'id-1\twidget\tdev\t2026-11-25T10:00:00Z\texample.org%%2Fv1beta1\t3\tRunning\tJob%%2Fcontroller\n'"#
         let client = try client("sightport-kube", script: stub)

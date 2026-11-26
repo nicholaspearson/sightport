@@ -320,6 +320,7 @@ struct ResourceNameCell: View {
     var body: some View {
         Text(verbatim: name).font(.system(size: 12, weight: .medium))
             .lineLimit(1).truncationMode(.middle).help(name).frame(minHeight: 29)
+            .background(TableRowHover().accessibilityHidden(true))
     }
 }
 

@@ -53,6 +53,8 @@ enum ClusterFields {
         .value("Kind", ".spec.names.kind"), .value("Group", ".spec.group"), .value("Scope", ".spec.scope"),
         ResourceField(name: "Served Versions", template:
             #"{{with .spec.versions}}{{$sep := ""}}{{range .}}{{if .served}}{{$sep}}{{urlquery .name}}{{$sep = ", "}}{{end}}{{end}}{{else}}{{with .spec.version}}{{urlquery .}}{{end}}{{end}}"#),
-        .condition("Established")
+        .condition("Established"),
+        ResourceField(name: "Storage Version", template:
+            #"{{range .spec.versions}}{{if .storage}}{{urlquery .name}}{{end}}{{end}}"#)
     ]
 }

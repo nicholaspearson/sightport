@@ -47,7 +47,7 @@ struct WorkbenchRecord: Identifiable {
 
 struct RecordName: View {
     let record: WorkbenchRecord
-    let activeContext: ContextID?
+    let connectedContext: ContextID?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -65,12 +65,12 @@ struct RecordName: View {
                         .foregroundStyle(.orange)
                         .help("Context unavailable")
                         .accessibilityLabel("Context unavailable")
-                } else if activeContext == id {
-                    Text("Active").font(.system(size: 9, weight: .medium))
+                } else if connectedContext == id {
+                    Text("Connected").font(.system(size: 9, weight: .medium))
                         .padding(.horizontal, 5).padding(.vertical, 2)
                         .foregroundStyle(Palette.forest)
                         .background(Palette.selection, in: RoundedRectangle(cornerRadius: 3))
-                        .fixedSize().accessibilityLabel("Active context in Sightport")
+                        .fixedSize().accessibilityLabel("Connected")
                 }
             }
         }
@@ -110,12 +110,26 @@ struct ConnectContextButton: View {
 
     var body: some View {
         let busy = id.map { workspace.checks[$0] == .checking } ?? false
-        let active = id != nil && id == workspace.activeContext
-        Button(busy ? "Connecting…" : active ? "Reconnect" : "Connect") {
+        let connected = id != nil && id == workspace.connectedContext
+        Button(busy ? "Connecting…" : connected ? "Reconnect" : "Connect") {
             if let id { workspace.connect(id) }
         }
         .disabled(id.flatMap { workspace.context(for: $0) } == nil || busy)
         .help(id.map { "Connect using " + $0.name } ?? "Select a context to connect")
+    }
+}
+
+struct ContextConnectionMenuAction: View {
+    @ObservedObject var workspace: Workspace
+    let id: ContextID
+
+    var body: some View {
+        if workspace.connectedContext == id || workspace.checks[id] == .checking {
+            Button("Disconnect") { workspace.disconnect(id) }
+        } else {
+            Button("Connect") { workspace.connect(id) }
+                .disabled(workspace.context(for: id) == nil)
+        }
     }
 }
 
@@ -124,10 +138,10 @@ struct RecordActions: View {
     let record: WorkbenchRecord
 
     var body: some View {
-        switch record.content {
-        case .context(let id, _):
-            FavoriteContextButton(workspace: workspace, id: id)
-        case .file:
+        HStack(spacing: 2) {
+            if case .context(let id, _) = record.content {
+                FavoriteContextButton(workspace: workspace, id: id)
+            }
             Menu {
                 RecordMenu(workspace: workspace, record: record)
             } label: {
@@ -148,7 +162,7 @@ struct RecordMenu: View {
     var body: some View {
         switch record.content {
         case .context(let id, let available):
-            ConnectContextButton(workspace: workspace, id: id)
+            ContextConnectionMenuAction(workspace: workspace, id: id)
             Button(workspace.favorites.contains(id) ? "Remove from favorites" : "Add to favorites") {
                 workspace.toggleFavorite(id)
             }
@@ -157,6 +171,8 @@ struct RecordMenu: View {
                 workspace.open(.file(id.file))
                 if available { workspace.select(record.id) }
             }.disabled(!workspace.sources.contains { $0.url == id.file })
+            Divider()
+            Button("Remove from Sightport…", role: .destructive) { workspace.requestContextRemoval(id) }
         case .file(let source):
             Button("Browse contexts") { workspace.open(.file(source.url)) }
             if workspace.canForget(source.url) {
