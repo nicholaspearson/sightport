@@ -27,6 +27,11 @@ struct ContentView: View {
         .foregroundStyle(Palette.ink)
         .background(Palette.canvas)
         .tint(Palette.forest)
+        .onAppear { workspace.setWindowVisible(true) }
+        .onDisappear { workspace.setWindowVisible(false) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
+            workspace.setWindowVisible(false)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             endWindowSessions()
         }
@@ -60,7 +65,7 @@ struct ContentView: View {
             }
         }
         .padding(.leading, 79).padding(.trailing, 12).frame(height: 39)
-        .background { WindowDragSurface(onClose: endWindowSessions) }
+        .background { WindowDragSurface(onClose: endWindowSessions, onVisibility: workspace.setWindowVisible) }
         .background(Palette.surface)
     }
 
@@ -105,6 +110,7 @@ struct ContentView: View {
     }
 
     private func endWindowSessions() {
+        workspace.setWindowVisible(false)
         if workspace.page.configDataKind != nil { workspace.select(nil) }
         workspace.closePodTerminals()
         workspace.portForwards.stopAll()
@@ -202,6 +208,11 @@ struct ContentView: View {
             Text("Local workspace")
             Rectangle().fill(Color.white.opacity(0.22)).frame(width: 1, height: 10).padding(.horizontal, 2)
             connectionStatus.lineLimit(1).truncationMode(.middle)
+            if workspace.pollingAfterWatchFailure, workspace.windowVisible {
+                Text("·")
+                Text("Refreshing every 5s")
+                    .help("The watch connection is unavailable. Sightport is retrying it and refreshing this list.")
+            }
             Spacer()
             if workspace.loading {
                 Text("Reading kubeconfig…")
@@ -288,20 +299,33 @@ private struct WorkspaceTab: View {
 
 private struct WindowDragSurface: NSViewRepresentable {
     var onClose: () -> Void
+    var onVisibility: (Bool) -> Void
 
     final class Surface: NSView {
         var onClose: (() -> Void)?
+        var onVisibility: ((Bool) -> Void)?
 
         override func viewWillMove(toWindow newWindow: NSWindow?) {
-            if let window { NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: window) }
+            NotificationCenter.default.removeObserver(self)
             if let newWindow {
                 NotificationCenter.default.addObserver(self, selector: #selector(windowClosing(_:)),
                                                        name: NSWindow.willCloseNotification, object: newWindow)
+                for name in [NSWindow.didBecomeKeyNotification, NSWindow.didMiniaturizeNotification,
+                             NSWindow.didDeminiaturizeNotification, NSWindow.didChangeOcclusionStateNotification] {
+                    NotificationCenter.default.addObserver(self, selector: #selector(visibilityChanged),
+                                                           name: name, object: newWindow)
+                }
+                NotificationCenter.default.addObserver(self, selector: #selector(visibilityChanged),
+                                                       name: NSApplication.didUnhideNotification, object: nil)
             }
             super.viewWillMove(toWindow: newWindow)
         }
 
         @objc private func windowClosing(_ notification: Notification) { onClose?() }
+        @objc private func visibilityChanged() {
+            guard let window else { return }
+            onVisibility?(window.isVisible && !window.isMiniaturized && !NSApp.isHidden)
+        }
 
         override func mouseDown(with event: NSEvent) {
             if event.clickCount == 2 { window?.performZoom(nil) }
@@ -309,5 +333,8 @@ private struct WindowDragSurface: NSViewRepresentable {
         }
     }
     func makeNSView(context: Context) -> Surface { Surface() }
-    func updateNSView(_ view: Surface, context: Context) { view.onClose = onClose }
+    func updateNSView(_ view: Surface, context: Context) {
+        view.onClose = onClose
+        view.onVisibility = onVisibility
+    }
 }

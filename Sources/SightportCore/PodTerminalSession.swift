@@ -7,12 +7,12 @@ enum PodTerminalError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidTarget: return "Choose a pod, container, and shell to open a terminal."
-        case .launch: return "Sightport could not start the local terminal for kubectl."
+        case .launch: return "Sightport could not start the pod terminal."
         }
     }
 }
 
-/// A live, interactive kubectl session. Output is delivered in order on a background worker.
+/// A live, interactive SDK session. Output is delivered in order on a background worker.
 /// The receiver can apply backpressure by returning after it has consumed a chunk.
 public final class PodTerminalSession: Sendable {
     private let worker: TerminalWorker
@@ -170,7 +170,7 @@ private final class TerminalWorker: @unchecked Sendable {
             let events = Int16(POLLIN) | (changes.hasInput ? Int16(POLLOUT) : 0)
             var fds = [pollfd(fd: atEOF ? -1 : master, events: events, revents: 0),
                        pollfd(fd: wakeRead, events: Int16(POLLIN), revents: 0)]
-            // A credential helper can retain the slave after kubectl exits. Reap the actual child
+            // A credential helper can retain the slave after the client exits. Reap the actual child
             // independently of PTY EOF, including while an otherwise idle terminal is attached.
             let ready = poll(&fds, nfds_t(fds.count), 500)
             if ready < 0 {
@@ -209,7 +209,7 @@ private final class TerminalWorker: @unchecked Sendable {
     }
 
     private static func disconnect(_ child: pid_t) {
-        // forkpty gives kubectl its own session and process group. Before login_tty has run,
+        // forkpty gives the client its own session and process group. Before login_tty has run,
         // that group may not exist yet. The PID is ours until this worker reaps it.
         if Darwin.kill(-child, SIGKILL) == -1 && errno == ESRCH { _ = Darwin.kill(child, SIGKILL) }
     }

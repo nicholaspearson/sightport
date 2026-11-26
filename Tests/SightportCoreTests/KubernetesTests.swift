@@ -31,9 +31,6 @@ final class KubernetesTests: XCTestCase {
     }
 
     func testReadsRealKubeconfigLocallyIncludingCurrentContextAndNamespace() async throws {
-        let available = ["/opt/homebrew/bin/kubectl", "/usr/local/bin/kubectl"]
-            + (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { "\($0)/kubectl" }
-        try XCTSkipUnless(available.contains(where: FileManager.default.isExecutableFile(atPath:)), "kubectl is unavailable")
         let marker = folder.appendingPathComponent("helper-ran")
         let config = folder.appendingPathComponent("fixture.yaml")
         let file = """
@@ -64,7 +61,9 @@ final class KubernetesTests: XCTestCase {
               interactiveMode: Never
         """
         try file.write(to: config, atomically: true, encoding: .utf8)
-        let contexts = try await KubernetesClient().contexts(in: config)
+        let sdk = try TestSDK.executable.get()
+        let client = KubernetesClient(environment: [:], homeDirectory: folder, sdkExecutable: sdk)
+        let contexts = try await client.contexts(in: config)
         XCTAssertEqual(Set(contexts.map(\.name)), ["team alpha", "personal"])
         let current = try XCTUnwrap(contexts.first(where: \.isCurrent))
         XCTAssertEqual(current.name, "team alpha")
@@ -73,6 +72,24 @@ final class KubernetesTests: XCTestCase {
         XCTAssertNil(contexts.first { $0.name == "personal" }?.namespace)
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
         XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), file)
+    }
+
+    func testMissingBundledSDKDoesNotFallBackToProgramsOnPATH() async throws {
+        let config = folder.appendingPathComponent("config.yaml")
+        try Data().write(to: config)
+        let marker = folder.appendingPathComponent("invoked")
+        for name in ["kubectl", "sightport-kube"] {
+            let stub = folder.appendingPathComponent(name)
+            try "#!/bin/sh\n/usr/bin/touch \"$MARKER\"\n".write(to: stub, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stub.path)
+        }
+        let client = KubernetesClient(environment: ["PATH": folder.path, "MARKER": marker.path],
+                                      homeDirectory: folder, sdkExecutable: folder.appendingPathComponent("missing"))
+        do {
+            _ = try await client.contexts(in: config)
+            XCTFail("Expected missing SDK")
+        } catch KubernetesError.missingSDK {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
     }
 
     func testProbeUsesExplicitFileContextAndVersionEndpoint() async throws {
@@ -125,11 +142,11 @@ final class KubernetesTests: XCTestCase {
 
     private func fakeClient(_ script: String, environment: [String: String] = [:],
                             timeout: TimeInterval = 5) throws -> KubernetesClient {
-        let executable = folder.appendingPathComponent("kubectl")
+        let executable = folder.appendingPathComponent("sightport-kube")
         try ("#!/bin/sh\n" + script + "\n").write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
         var environment = environment
         environment["PATH"] = folder.path
-        return KubernetesClient(environment: environment, homeDirectory: folder, timeout: timeout)
+        return KubernetesClient(environment: environment, homeDirectory: folder, timeout: timeout, sdkExecutable: executable)
     }
 }

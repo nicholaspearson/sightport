@@ -109,10 +109,10 @@ final class PodTerminalTests: XCTestCase {
     }
 
     private func fixture(_ script: String) throws -> KubernetesClient {
-        let executable = folder.appendingPathComponent("kubectl")
+        let executable = folder.appendingPathComponent("sightport-kube")
         try ("#!/bin/sh\n" + script + "\n").write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
-        return KubernetesClient(environment: ["PATH": folder.path, "FIXTURE_DIR": folder.path], homeDirectory: folder)
+        return KubernetesClient(environment: ["PATH": folder.path, "FIXTURE_DIR": folder.path], homeDirectory: folder, sdkExecutable: executable)
     }
 }
 

@@ -78,8 +78,7 @@ struct ConfigPropertiesGrid<Content: View>: View {
             if let date = row.createdAt {
                 GridRow {
                     Text("Created").foregroundStyle(Palette.muted)
-                    Text(verbatim: row.age + " ago · " + date.formatted(date: .abbreviated, time: .shortened))
-                        .textSelection(.enabled)
+                    ResourceAgeText(createdAt: date, includeDate: true)
                 }
             }
             GridRow {
@@ -95,6 +94,38 @@ struct ConfigPropertiesGrid<Content: View>: View {
                 }
             }
             content()
+        }
+    }
+}
+
+struct ConfigDetailRead<Value>: ViewModifier {
+    @EnvironmentObject private var workspace: Workspace
+    let version: String?
+    let attempt: Int
+    let load: () async throws -> Value
+    let receive: (Result<Value, Error>) -> Void
+
+    private struct Request: Equatable {
+        let version: String?
+        let attempt: Int
+        let refresh: Int
+    }
+
+    func body(content: Content) -> some View {
+        let request = Request(version: version, attempt: attempt, refresh: workspace.detailRefreshID)
+        content.task(id: workspace.windowVisible ? request : nil) {
+            guard workspace.windowVisible else { return }
+            while !Task.isCancelled {
+                let response: Result<Value, Error>
+                do { response = .success(try await load()) }
+                catch { response = .failure(error) }
+                guard !Task.isCancelled else { return }
+                receive(response)
+                // Versioned objects refresh on change. Events and older servers have no revision here.
+                if case .success = response, version != nil { return }
+                do { try await Task.sleep(for: .seconds(15)) }
+                catch { return }
+            }
         }
     }
 }
@@ -152,15 +183,9 @@ private struct ConfigMapContent: View {
                 }
             }
         }
-        .task(id: attempt) {
-            let response: Result<ConfigMapDetails, Error>
-            do {
-                let details = try await KubernetesClient().configMapDetails(for: row, in: context.file, context: context.name)
-                response = .success(details)
-            } catch { response = .failure(error) }
-            guard !Task.isCancelled else { return }
-            result = response
-        }
+        .modifier(ConfigDetailRead(version: row.resourceVersion, attempt: attempt, load: {
+            try await KubernetesClient().configMapDetails(for: row, in: context.file, context: context.name)
+        }, receive: { result = $0 }))
     }
 
     @ViewBuilder private func metadata(_ title: String, _ entries: [String: String],

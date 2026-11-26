@@ -14,7 +14,7 @@ final class SecretDetailsTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         config = directory.appendingPathComponent("fixture config")
         try Data().write(to: config)
-        let executable = directory.appendingPathComponent("kubectl")
+        let executable = directory.appendingPathComponent("sightport-kube")
         try """
         #!/bin/sh
         printf '%s\\n' "$@" > "$FIXTURE/args"
@@ -22,7 +22,7 @@ final class SecretDetailsTests: XCTestCase {
         cat "$FIXTURE/output"
         """.write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
-        client = KubernetesClient(environment: ["PATH": directory.path, "FIXTURE": directory.path], homeDirectory: directory)
+        client = KubernetesClient(environment: ["PATH": directory.path, "FIXTURE": directory.path], homeDirectory: directory, sdkExecutable: executable)
     }
 
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: directory) }
@@ -38,14 +38,15 @@ final class SecretDetailsTests: XCTestCase {
         }
     }
 
-    func testRealKubectlListAndDetailProjections() throws {
+    func testSDKListAndDetailProjections() throws {
         let fixture: [String: Any] = [
             "metadata": ["uid": row.id, "name": row.name, "namespace": "sandbox",
-                         "annotations": ["fixture": "private-annotation"]],
+                         "resourceVersion": "92", "annotations": ["fixture": "private-annotation"]],
             "type": "Opaque", "data": ["alpha.config": "ZXhhbXBsZQ==", "beta": ""]
         ]
         let list = try renderProjection(ResourceKind.secrets.listTemplate, object: ["items": [fixture]])
-        XCTAssertEqual(String(decoding: list, as: UTF8.self), "secret-uid-1\texample\tsandbox\t\tOpaque\t2\n")
+        XCTAssertEqual(String(decoding: list, as: UTF8.self), "secret-uid-1\texample\tsandbox\t\tOpaque\t2\t92\n")
+        XCTAssertEqual(try ResourceRow.decodeList(list, kind: .secrets).first?.resourceVersion, "92")
         let detail = try renderProjection(SecretDetails.projection, object: fixture)
         XCTAssertEqual(String(decoding: detail, as: UTF8.self), "secret-uid-1\texample\tsandbox\nalpha.config\tZXhhbXBsZQ==\nbeta\t\n")
         XCTAssertEqual(try SecretDetails(output: detail, row: row, namespace: "sandbox").entries.map(\.text), ["example", ""])

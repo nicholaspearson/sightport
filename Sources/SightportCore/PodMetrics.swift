@@ -19,7 +19,7 @@ public struct PodUsage: Equatable, Sendable {
         self.memoryBytes = memoryBytes
     }
 
-    // kubectl top sums container usage and prints integer millicores and mebibytes.
+    // The metrics client sums container usage and prints integer millicores and mebibytes.
     static func decodeTable(_ data: Data, namespace: String?) throws -> [PodKey: PodUsage] {
         guard let table = String(data: data, encoding: .utf8) else { throw PodReadError.invalidMetrics }
         var usage: [PodKey: PodUsage] = [:]
@@ -44,7 +44,7 @@ enum PodReadError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidMetrics: return "kubectl returned unreadable pod usage measurements."
+        case .invalidMetrics: return "Sightport could not read the pod usage measurements."
         case .missingLogTarget: return "Select a pod and container to read logs."
         }
     }

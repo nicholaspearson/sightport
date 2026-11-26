@@ -40,7 +40,7 @@ final class PortForwardTests: XCTestCase {
         let args = try String(contentsOf: directory.appendingPathComponent("args"), encoding: .utf8)
         XCTAssertEqual(args.split(separator: "\n").map(String.init), [
             "--kubeconfig=" + file.path, "--context=developer; one", "--namespace=blue",
-            "port-forward", "--address=127.0.0.1", "--pod-running-timeout=15s", "service/front-end", ":http"
+            "port-forward", "--address=127.0.0.1", "service/front-end", ":http"
         ])
         let pid = try XCTUnwrap(Int32(try String(contentsOf: directory.appendingPathComponent("pid"), encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)))
@@ -80,9 +80,9 @@ final class PortForwardTests: XCTestCase {
     }
 
     private func fixture(_ script: String) throws -> KubernetesClient {
-        let executable = directory.appendingPathComponent("kubectl")
+        let executable = directory.appendingPathComponent("sightport-kube")
         try Data(("#!/bin/sh\n" + script + "\n").utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-        return KubernetesClient(environment: ["PATH": directory.path, "FIXTURE": directory.path], homeDirectory: directory)
+        return KubernetesClient(environment: ["PATH": directory.path, "FIXTURE": directory.path], homeDirectory: directory, sdkExecutable: executable)
     }
 }

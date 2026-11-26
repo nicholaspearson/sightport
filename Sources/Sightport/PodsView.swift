@@ -179,8 +179,7 @@ struct PodsTable: View {
             PodStatus(pod: item.row.pod)
         }.width(min: 85, ideal: 122)
         TableColumn("Age", value: \.age) { item in
-            ResourceCell(value: item.row.age)
-                .help(item.row.createdAt?.formatted(date: .abbreviated, time: .standard) ?? "")
+            ResourceCell(ageSince: item.row.createdAt)
         }.width(min: 45, ideal: 60)
         TableColumn("") { item in
             Menu {
@@ -429,8 +428,8 @@ struct PodInspector: View {
     @ViewBuilder private var properties: some View {
         if let date = row.createdAt {
             field("Created") {
-                Text(verbatim: row.age + " ago · " + date.formatted(date: .abbreviated, time: .shortened))
-                    .help(date.formatted(date: .complete, time: .complete)).textSelection(.enabled)
+                ResourceAgeText(createdAt: date, includeDate: true)
+                    .help(date.formatted(date: .complete, time: .complete))
             }
         }
         field("Name") { Text(verbatim: row.name).textSelection(.enabled) }

@@ -102,7 +102,7 @@ struct PodLogTarget: Identifiable {
     let context: ContextID
     let namespace: String
     let name: String
-    let containers: [PodContainer]
+    var containers: [PodContainer]
 }
 
 enum PodDrawerTab: Hashable {
@@ -137,6 +137,9 @@ final class Workspace: ObservableObject {
 
     @Published private(set) var connectedContext: ContextID?
     @Published private(set) var rows: [ResourceRow] = []
+    @Published private(set) var windowVisible = true
+    @Published private(set) var detailRefreshID = 0
+    @Published private(set) var pollingAfterWatchFailure = false
     @Published private(set) var resourceLoading = false
     @Published private(set) var resourceError: String?
     @Published private(set) var namespaceNames: [String] = []
@@ -157,10 +160,10 @@ final class Workspace: ObservableObject {
     }
 
     private var resourceTask: Task<Void, Never>?
+    private var resourceGeneration = UUID()
     private var metricsTask: Task<Void, Never>?
     private var linkedResource: LinkedResource?
     private var namespaceTask: Task<Void, Never>?
-    private var requestedNamespaces = false
 
     private let repository = ContextPreferencesRepository()
     private let client = KubernetesClient()
@@ -215,7 +218,7 @@ final class Workspace: ObservableObject {
     }
 
     func select(_ item: WorkbenchItem?) {
-        selection = item
+        if selection != item { selection = item }
         tabSelections[page] = item
     }
 
@@ -432,9 +435,6 @@ extension Workspace {
         portForwards.stopAll()
         closePodLogs()
         closePodTerminals()
-        namespaceTask?.cancel()
-        namespaceTask = nil
-        requestedNamespaces = false
         namespaceNames = []
         namespaceError = nil
         namespaceFilter = nil
@@ -455,6 +455,7 @@ extension Workspace {
         let scope = value?.isEmpty == true ? nil : value
         guard connectedContext != nil, scope != namespaceFilter else { return }
         if page.configDataKind != nil { select(nil) }
+        if let scope, let target = podLogTarget, target.namespace != scope { closePodLogs() }
         namespaceFilter = scope
         if case .cluster(let section) = page, section.isNamespaced {
             loadSection(section)
@@ -462,118 +463,206 @@ extension Workspace {
     }
 
     func reloadResources() {
-        if case .cluster(let section) = page { loadSection(section, refresh: true) }
+        guard case .cluster(let section) = page else { return }
+        detailRefreshID &+= 1
+        loadSection(section, refresh: true)
     }
 
-    private func clearResourceTable(keepingRows: Bool = false) {
+    func setWindowVisible(_ visible: Bool) {
+        guard windowVisible != visible else { return }
+        windowVisible = visible
+        if visible, case .cluster(let section) = page {
+            loadSection(section, refresh: true)
+        } else if !visible {
+            stopResourceReads()
+        }
+    }
+
+    private func stopResourceReads() {
+        resourceGeneration = UUID()
         resourceTask?.cancel()
         resourceTask = nil
         metricsTask?.cancel()
         metricsTask = nil
+        namespaceTask?.cancel()
+        namespaceTask = nil
+    }
+
+    private func clearResourceTable() {
+        stopResourceReads()
+        rows = []
         podMetrics = [:]
         podMetricsLoading = false
         podMetricsError = nil
         linkedResource = nil
-        if !keepingRows { rows = [] }
         resourceError = nil
+        pollingAfterWatchFailure = false
         overview = [:]
         resourceLoading = false
     }
 
     private func loadSection(_ section: ClusterSection, refresh: Bool = false) {
         guard let id = connectedContext else { return }
-        let keepPods = refresh && section == .resources(.pods)
-        clearResourceTable(keepingRows: keepPods)
-        if !keepPods { selection = nil }
-        resourceLoading = true
-        if section == .resources(.namespaces) {
-            readNamespaces(in: id, refresh: refresh)
-            return
+        if refresh {
+            stopResourceReads()
+        } else {
+            clearResourceTable()
+            selection = nil
         }
-        if section.isNamespaced && (!requestedNamespaces || refresh) {
-            readNamespaces(in: id, refresh: refresh)
+        guard windowVisible else { return }
+        let scope = section.isNamespaced ? namespaceFilter : nil
+        resourceLoading = rows.isEmpty && overview.isEmpty
+        if section.isNamespaced {
+            namespaceTask = Task {
+                await observeRows(.resources(.namespaces), in: id, scope: nil, onRows: { result in
+                    self.updateNamespaces(result)
+                }, onError: { error in
+                    self.namespaceError = error.localizedDescription
+                    self.namespaceNames = []
+                })
+            }
         }
-        let namespace = section.isNamespaced ? namespaceFilter : nil
-        if section == .overview {
-            loadWorkloadCounts(in: id, namespace: namespace)
-            return
-        }
-        if section == .portForwarding {
-            resourceLoading = false
-            return
-        }
-        resourceTask = Task {
-            do {
-                let result: [ResourceRow]
-                switch section {
-                case .customResources(let type):
-                    result = try await client.customResources(type, in: id.file, context: id.name, namespace: namespace)
-                case .helmReleases:
-                    result = try await client.helmReleases(in: id.file, context: id.name, namespace: namespace)
-                default:
-                    guard let kind = section.listKind else { return }
-                    result = try await client.resources(kind, in: id.file, context: id.name, namespace: namespace)
+
+        switch section {
+        case .overview:
+            resourceTask = Task {
+                while !Task.isCancelled {
+                    await loadWorkloadCounts(in: id, namespace: scope)
+                    try? await Task.sleep(for: .seconds(15))
                 }
-                guard !Task.isCancelled else { return }
-                rows = result
-                finishResourceSelection()
-                if section.listKind == .pods {
-                    for terminal in podTerminals where namespace == nil || terminal.namespace == namespace {
-                        let pod = result.first { $0.id == terminal.podID }
-                        terminal.updateContainers(pod?.runningContainerNames ?? [])
+            }
+        case .portForwarding:
+            resourceLoading = false
+        default:
+            resourceTask = Task {
+                await observeRows(section, in: id, scope: scope, onRows: { result in
+                    self.applyRows(result, section: section, context: id, namespace: scope)
+                }, onError: { error in
+                    self.rows = []
+                    self.selection = nil
+                    self.resourceError = error.localizedDescription
+                    self.resourceLoading = false
+                    if section == .resources(.pods) { self.closePodLogs() }
+                    if section == .resources(.namespaces) {
+                        self.namespaceError = error.localizedDescription
+                        self.namespaceNames = []
                     }
-                    if !result.isEmpty { loadPodMetrics(in: id, namespace: namespace) }
+                }, onPolling: { polling in
+                    if self.pollingAfterWatchFailure != polling { self.pollingAfterWatchFailure = polling }
+                })
+            }
+        }
+    }
+
+    private func observeRows(_ section: ClusterSection, in id: ContextID, scope: String?,
+                             onRows: @escaping @MainActor ([ResourceRow]) -> Void,
+                             onError: @escaping @MainActor (Error) -> Void,
+                             onPolling: @escaping @MainActor (Bool) -> Void = { _ in }) async {
+        let generation = resourceGeneration
+        let target: ResourceWatchTarget?
+        if case .customResources(let type) = section {
+            target = .custom(type)
+        } else {
+            target = section.listKind.map(ResourceWatchTarget.resource)
+        }
+        while !Task.isCancelled {
+            if let target {
+                let started = ContinuousClock.now
+                do {
+                    try await client.watchResources(target, in: id.file, context: id.name, namespace: scope) { rows in
+                        await MainActor.run {
+                            guard !Task.isCancelled, self.resourceGeneration == generation else { return }
+                            onPolling(false)
+                            onRows(rows)
+                        }
+                    }
+                } catch { /* The next LIST rechecks access and retrieves a fresh snapshot. */ }
+                guard !Task.isCancelled else { return }
+                // The API server normally ends healthy watches periodically. Reconnect
+                // immediately after a long-lived stream, back off after short failures.
+                if started.duration(to: .now) >= .seconds(30) { continue }
+                onPolling(true)
+            }
+            // Keep the table current while watch access is unavailable. Periodically
+            // establish a new list/watch so disconnects and expired cursors recover.
+            for _ in 0..<(target == nil ? 1 : 6) {
+                guard !Task.isCancelled else { return }
+                do {
+                    let snapshot: [ResourceRow]
+                    switch section {
+                    case .customResources(let type):
+                        snapshot = try await client.customResources(type, in: id.file, context: id.name, namespace: scope)
+                    case .helmReleases:
+                        snapshot = try await client.helmReleases(in: id.file, context: id.name, namespace: scope)
+                    default:
+                        guard let kind = section.listKind else { return }
+                        snapshot = try await client.resources(kind, in: id.file, context: id.name, namespace: scope)
+                    }
+                    guard !Task.isCancelled else { return }
+                    onRows(snapshot)
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    onError(error)
                 }
-            } catch {
-                guard !Task.isCancelled else { return }
-                resourceError = error.localizedDescription
-                linkedResource = nil
-                if keepPods { rows = []; select(nil) }
+                do { try await Task.sleep(for: .seconds(target == nil ? 15 : 5)) }
+                catch { return }
             }
-            resourceLoading = false
         }
     }
 
-    // Namespace choices remain available while navigating between resource tabs.
-    // The Namespaces table shares this request, including its RBAC error.
-    private func readNamespaces(in id: ContextID, refresh: Bool) {
-        if namespaceTask != nil && !refresh { return }
-        namespaceTask?.cancel()
-        requestedNamespaces = true
-        namespaceError = nil
-        namespaceTask = Task {
-            let result: [ResourceRow]
-            do {
-                result = try await client.resources(.namespaces, in: id.file, context: id.name, namespace: nil)
-                guard !Task.isCancelled, id == connectedContext else { return }
-            } catch {
-                guard !Task.isCancelled, id == connectedContext else { return }
-                namespaceError = error.localizedDescription
-                result = []
-            }
-            namespaceNames = result.map(\.name).sorted()
-            if page == .cluster(.resources(.namespaces)) {
-                rows = result
-                resourceError = namespaceError
-                resourceLoading = false
-                finishResourceSelection()
-            }
-            namespaceTask = nil
-        }
+    private func updateNamespaces(_ result: [ResourceRow]) {
+        let names = result.map(\.name).sorted()
+        if names != namespaceNames { namespaceNames = names }
+        if namespaceError != nil { namespaceError = nil }
     }
 
-    private func loadPodMetrics(in id: ContextID, namespace: String?) {
-        podMetricsLoading = true
+    private func applyRows(_ result: [ResourceRow], section: ClusterSection, context: ContextID, namespace: String?) {
+        let restore = resourceLoading || resourceError != nil || linkedResource != nil
+        if rows != result { rows = result }
+        if resourceError != nil { resourceError = nil }
+        if resourceLoading { resourceLoading = false }
+        if restore {
+            finishResourceSelection()
+        } else if case .resource(let selected) = selection, !result.contains(where: { $0.id == selected }) {
+            select(nil)
+        }
+        if section == .resources(.namespaces) { updateNamespaces(result) }
+        guard section == .resources(.pods) else { return }
+        for terminal in podTerminals where namespace == nil || terminal.namespace == namespace {
+            let pod = result.first { $0.id == terminal.podID }
+            terminal.updateContainers(pod?.runningContainerNames ?? [])
+        }
+        if let target = podLogTarget {
+            if let pod = result.first(where: { $0.id == target.podID }), let containers = pod.pod?.containers {
+                if containers.map(\.name) != target.containers.map(\.name) {
+                    podLogTarget?.containers = containers
+                }
+            } else {
+                closePodLogs()
+            }
+        }
+        if !result.isEmpty && metricsTask == nil { startPodMetrics(in: context, namespace: namespace) }
+    }
+
+    private func startPodMetrics(in id: ContextID, namespace: String?) {
         metricsTask = Task {
-            do {
-                let usage = try await client.podMetrics(in: id.file, context: id.name, namespace: namespace)
-                guard !Task.isCancelled else { return }
-                podMetrics = usage
-            } catch {
-                guard !Task.isCancelled else { return }
-                podMetricsError = error.localizedDescription
+            while !Task.isCancelled {
+                if !rows.isEmpty {
+                    if podMetrics.isEmpty && podMetricsError == nil { podMetricsLoading = true }
+                    do {
+                        let usage = try await client.podMetrics(in: id.file, context: id.name, namespace: namespace)
+                        guard !Task.isCancelled else { return }
+                        if podMetrics != usage { podMetrics = usage }
+                        if podMetricsError != nil { podMetricsError = nil }
+                    } catch {
+                        guard !Task.isCancelled else { return }
+                        if !podMetrics.isEmpty { podMetrics = [:] }
+                        if podMetricsError != error.localizedDescription { podMetricsError = error.localizedDescription }
+                    }
+                    if podMetricsLoading { podMetricsLoading = false }
+                }
+                try? await Task.sleep(for: .seconds(podMetricsError == nil ? 15 : 60))
             }
-            podMetricsLoading = false
         }
     }
 
@@ -643,7 +732,8 @@ extension Workspace {
     }
 
     func loadPodLogs(for target: PodLogTarget, container: String, previous: Bool) async throws -> String {
-        guard podLogTarget?.id == target.id, target.context == connectedContext,
+        guard windowVisible, podLogTarget?.id == target.id, target.context == connectedContext,
+              rows.contains(where: { $0.id == target.podID }),
               target.containers.contains(where: { $0.name == container }) else { throw CancellationError() }
         return try await client.podLogs(in: target.context.file, context: target.context.name,
                                         namespace: target.namespace, pod: target.name, container: container,
@@ -703,33 +793,31 @@ extension Workspace {
         }
     }
 
-    private func loadWorkloadCounts(in id: ContextID, namespace: String?) {
+    private func loadWorkloadCounts(in id: ContextID, namespace: String?) async {
         let kinds = ResourceKind.workloads
-        overview = Dictionary(uniqueKeysWithValues: kinds.map { ($0, WorkloadCount.loading) })
+        if overview.isEmpty { overview = Dictionary(uniqueKeysWithValues: kinds.map { ($0, WorkloadCount.loading) }) }
         let client = self.client
-        resourceTask = Task {
-            await withTaskGroup(of: (ResourceKind, WorkloadCount).self) { group in
-                // Bound concurrent kubectl processes even when listing every workload kind.
-                for (index, kind) in kinds.enumerated() {
-                    if index >= 3, let (completed, result) = await group.next(), !Task.isCancelled {
-                        overview[completed] = result
-                    }
-                    guard !Task.isCancelled else { group.cancelAll(); return }
-                    group.addTask {
-                        do {
-                            let count = try await client.resourceCount(kind, in: id.file, context: id.name, namespace: namespace)
-                            return (kind, .count(count))
-                        } catch {
-                            return (kind, .failed(error.localizedDescription))
-                        }
-                    }
+        await withTaskGroup(of: (ResourceKind, WorkloadCount).self) { group in
+            // Bound concurrent API reads even when listing every workload kind.
+            for (index, kind) in kinds.enumerated() {
+                if index >= 3, let (completed, result) = await group.next(), !Task.isCancelled {
+                    if overview[completed] != result { overview[completed] = result }
                 }
-                for await (kind, result) in group {
-                    guard !Task.isCancelled else { group.cancelAll(); return }
-                    overview[kind] = result
+                guard !Task.isCancelled else { group.cancelAll(); return }
+                group.addTask {
+                    do {
+                        let count = try await client.resourceCount(kind, in: id.file, context: id.name, namespace: namespace)
+                        return (kind, .count(count))
+                    } catch {
+                        return (kind, .failed(error.localizedDescription))
+                    }
                 }
             }
-            if !Task.isCancelled { resourceLoading = false }
+            for await (kind, result) in group {
+                guard !Task.isCancelled else { group.cancelAll(); return }
+                if overview[kind] != result { overview[kind] = result }
+            }
         }
+        if !Task.isCancelled && resourceLoading { resourceLoading = false }
     }
 }

@@ -22,7 +22,7 @@ struct SecretInspector: View {
             ConfigInspectorSection("Events") {
                 SecretReadSection(retryLabel: "Retry secret events") {
                     try await KubernetesClient().secretEvents(for: row, in: context.file, context: context.name)
-                } content: { events in
+                } content: { events, _ in
                     if events.isEmpty {
                         Text("No events found").foregroundStyle(Palette.muted)
                     } else {
@@ -32,14 +32,14 @@ struct SecretInspector: View {
             }
             Divider()
             ConfigInspectorSection("Data") {
-                SecretReadSection(retryLabel: "Retry secret data") {
+                SecretReadSection(version: row.resourceVersion, retryLabel: "Retry secret data") {
                     try await KubernetesClient().secretDetails(for: row, in: context.file, context: context.name)
-                } content: { details in
+                } content: { details, current in
                     if details.entries.isEmpty {
                         Text("No data keys").foregroundStyle(Palette.muted)
                     } else {
                         LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(details.entries) { SecretEntryView(entry: $0) }
+                            ForEach(details.entries) { SecretEntryView(entry: $0, current: current) }
                         }
                     }
                 }
@@ -69,16 +69,18 @@ struct SecretInspector: View {
 }
 
 private struct SecretReadSection<Value, Content: View>: View {
+    var version: String?
     let retryLabel: String
     let load: () async throws -> Value
-    @ViewBuilder let content: (Value) -> Content
+    @ViewBuilder let content: (Value, Bool) -> Content
+    @State private var loadedVersion: String?
     @State private var result: Result<Value, Error>?
     @State private var attempt = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             switch result {
-            case .success(let value): content(value)
+            case .success(let value): content(value, loadedVersion == version)
             case .failure(let error):
                 VStack(alignment: .leading, spacing: 6) {
                     Text(error.localizedDescription).foregroundStyle(Palette.muted)
@@ -89,18 +91,16 @@ private struct SecretReadSection<Value, Content: View>: View {
                 ProgressView().controlSize(.small)
             }
         }
-        .task(id: attempt) {
-            let response: Result<Value, Error>
-            do { response = .success(try await load()) }
-            catch { response = .failure(error) }
-            guard !Task.isCancelled else { return }
-            result = response
-        }
+        .modifier(ConfigDetailRead(version: version, attempt: attempt, load: load, receive: {
+            result = $0
+            loadedVersion = version
+        }))
     }
 }
 
 private struct SecretEntryView: View {
     let entry: SecretDataEntry
+    let current: Bool
     @State private var revealed = false
     @State private var useBase64 = false
 
@@ -110,7 +110,7 @@ private struct SecretEntryView: View {
                 Text(verbatim: entry.key).fontWeight(.medium)
                     .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
                 Spacer(minLength: 2)
-                if revealed, entry.byteCount > 0 {
+                if current, revealed, entry.byteCount > 0 {
                     if entry.text != nil {
                         Picker("Format for " + entry.key, selection: $useBase64) {
                             Text("Text").tag(false)
@@ -127,7 +127,9 @@ private struct SecretEntryView: View {
                 }
             }
             Group {
-                if revealed {
+                if !current {
+                    Text("Updating…").foregroundStyle(Palette.muted)
+                } else if revealed {
                     if entry.byteCount == 0 {
                         Text("Empty value").foregroundStyle(Palette.muted)
                     } else {

@@ -24,7 +24,7 @@ final class ExtensionResourcesTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
         return KubernetesClient(environment: ["PATH": directory.path, "ARGS_FILE": directory.appendingPathComponent("args").path,
                                                "HELM_KUBEAPISERVER": "https://ignored.invalid", "HELM_NAMESPACE": "ignored"],
-                                homeDirectory: directory)
+                                homeDirectory: directory, sdkExecutable: executable)
     }
 
     private var arguments: [String] {
@@ -51,12 +51,13 @@ final class ExtensionResourcesTests: XCTestCase {
 
     func testQueriesSelectedServedVersionAndCorrectScope() async throws {
         let stub = #"printf 'id-1\twidget\tdev\t2026-11-25T10:00:00Z\texample.org%%2Fv1beta1\t3\tRunning\tJob%%2Fcontroller\n'"#
-        let client = try client("kubectl", script: stub)
+        let client = try client("sightport-kube", script: stub)
         let type = try XCTUnwrap(definition())
         let rows = try await client.customResources(type, in: config, context: "Team Alpha", namespace: "dev")
         XCTAssertEqual(try arguments.prefix(5), ["--kubeconfig=" + config.path, "--context=Team Alpha",
                                                   "--request-timeout=8s", "get", "widgets.v1beta1.example.org"])
         XCTAssertTrue(try arguments.contains("--namespace=dev"))
+        XCTAssertTrue(try arguments.contains("--api-version=v1beta1"))
         XCTAssertEqual(rows.first?.values, ["example.org/v1beta1", "3", "Running", "Job/controller"])
         XCTAssertEqual(rows.first?.id, "id-1")
         _ = try await client.customResources(type, in: config, context: "Team Alpha", namespace: nil)
@@ -93,7 +94,7 @@ final class ExtensionResourcesTests: XCTestCase {
             XCTAssertTrue(error.localizedDescription.contains("Helm releases"))
             XCTAssertFalse(error.localizedDescription.contains("private-marker"))
         }
-        let kube = try client("kubectl", script: script)
+        let kube = try client("sightport-kube", script: script)
         let type = try XCTUnwrap(definition())
         do {
             _ = try await kube.customResources(type, in: config, context: "example", namespace: nil)

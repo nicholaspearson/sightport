@@ -56,7 +56,7 @@ private enum PortForwardError: LocalizedError {
         case .name: return "Enter a valid pod or service name."
         case .local: return "Use a local port from 1 to 65535, or leave it blank for an available port."
         case .remote: return "Enter a remote port from 1 to 65535 or a Kubernetes port name."
-        case .launch: return "Sightport could not start kubectl for port forwarding."
+        case .launch: return "Sightport could not start the Kubernetes client for port forwarding."
         }
     }
 }
@@ -182,7 +182,7 @@ private final class ForwardWorker: @unchecked Sendable {
         process.terminationHandler = nil
         if lock.withLock({ stopped }) { onStatus(.stopped) }
         else if let problem { onStatus(.failed(problem)) }
-        else { onStatus(.failed(listening ? "The connection to the pod ended." : "kubectl could not establish the port forward.")) }
+        else { onStatus(.failed(listening ? "The connection to the pod ended." : "Sightport could not establish the port forward.")) }
     }
 
     // Credential helpers can write to stderr. Publish only known failure categories.

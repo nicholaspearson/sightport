@@ -37,7 +37,7 @@ enum ArgoFields {
         .count("Roles", ".spec.roles")
     ]
 
-    // Only these explicitly named identity fields leave kubectl's projection.
+    // Only these explicitly named identity fields enter the table projection.
     // Secret payloads and connection credentials never enter the resource table.
     static let repositories: [ResourceField] = [
         .value("Repository", ".data.url"), .value("Type", ".data.type"), .value("Project", ".data.project")

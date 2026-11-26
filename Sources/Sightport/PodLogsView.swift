@@ -17,6 +17,7 @@ struct PodLogsView: View {
         let container: String
         let previous: Bool
         let refreshNumber: Int
+        let restartCount: Int?
     }
 
     private struct LogResult {
@@ -33,7 +34,10 @@ struct PodLogsView: View {
     }
 
     var body: some View {
-        let request = Request(container: container, previous: previous, refreshNumber: refreshNumber)
+        let restartCount = previous ? workspace.rows.first(where: { $0.id == target.podID })?.pod?
+            .containers.first(where: { $0.name == container })?.restartCount : nil
+        let request = Request(container: container, previous: previous, refreshNumber: refreshNumber, restartCount: restartCount)
+        let active = isVisible && workspace.windowVisible
         VStack(spacing: 0) {
             if isVisible {
                 HStack(spacing: 10) {
@@ -76,14 +80,29 @@ struct PodLogsView: View {
         .font(.system(size: 12))
         .foregroundStyle(Palette.ink)
         .background(Palette.canvas)
-        .task(id: request) {
-            let lines: Result<String, Error>
-            do {
-                lines = .success(try await workspace.loadPodLogs(for: target, container: request.container,
-                                                                  previous: request.previous))
-            } catch { lines = .failure(error) }
-            guard !Task.isCancelled, workspace.podLogTarget?.id == target.id else { return }
-            result = LogResult(request: request, lines: lines)
+        .onChange(of: target.containers.map(\.name)) { _, names in
+            guard !names.contains(container) else { return }
+            container = target.containers.first { $0.role == .app }?.name ?? names.first ?? ""
+            previous = false
+        }
+        .task(id: active ? request : nil) {
+            guard active else { return }
+            while !Task.isCancelled {
+                let lines: Result<String, Error>
+                do {
+                    lines = .success(try await workspace.loadPodLogs(for: target, container: request.container,
+                                                                     previous: request.previous))
+                } catch { lines = .failure(error) }
+                guard !Task.isCancelled, workspace.podLogTarget?.id == target.id else { return }
+                result = LogResult(request: request, lines: lines)
+                if request.previous { return }
+                let delay: Duration
+                switch lines {
+                case .success: delay = .seconds(3)
+                case .failure: delay = .seconds(15)
+                }
+                do { try await Task.sleep(for: delay) } catch { return }
+            }
         }
     }
 
@@ -134,8 +153,24 @@ private struct LogText: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let view = scroll.documentView as? NSTextView else { return }
         if view.string != text {
-            view.string = text
-            view.scrollRangeToVisible(NSRange(location: (text as NSString).length, length: 0))
+            let viewport = scroll.documentVisibleRect
+            let selection = view.selectedRange()
+            let followTail = view.string.isEmpty || (selection.length == 0 && viewport.maxY >= view.bounds.maxY - 2)
+            let previousLength = (view.string as NSString).length
+            let newText = text as NSString
+            if text.utf8.starts(with: view.string.utf8), let storage = view.textStorage {
+                storage.replaceCharacters(in: NSRange(location: previousLength, length: 0),
+                                          with: newText.substring(from: previousLength))
+            } else {
+                view.string = text
+                if NSMaxRange(selection) <= newText.length { view.setSelectedRange(selection) }
+            }
+            if followTail {
+                view.scrollRangeToVisible(NSRange(location: newText.length, length: 0))
+            } else {
+                scroll.contentView.scroll(to: viewport.origin)
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
         }
         if context.coordinator.handledFindRequest != findRequest {
             context.coordinator.handledFindRequest = findRequest

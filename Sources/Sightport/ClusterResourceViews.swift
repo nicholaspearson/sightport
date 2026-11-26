@@ -242,7 +242,7 @@ struct ClusterResourceTable: View {
     }
 
     private var ageColumn: TableColumn<ResourceRow, KeyPathComparator<ResourceRow>, ResourceCell, Text> {
-        TableColumn("Age", value: \.ageSortValue) { ResourceCell(value: $0.age) }.width(min: 43, ideal: 55, max: 85)
+        TableColumn("Age", value: \.ageSortValue) { ResourceCell(ageSince: $0.createdAt) }.width(min: 43, ideal: 55, max: 85)
     }
 
     private var legacyDateColumn: TableColumn<ResourceRow, KeyPathComparator<ResourceRow>, ResourceCell, Text> {
@@ -324,10 +324,68 @@ struct ResourceNameCell: View {
 }
 
 struct ResourceCell: View {
-    let value: String
+    var value = ""
+    var ageSince: Date?
+
     var body: some View {
-        Text(verbatim: value.isEmpty ? "—" : value).lineLimit(1).truncationMode(.middle)
-            .font(.system(size: 11.5)).foregroundStyle(Palette.muted).help(value)
+        Group {
+            if let ageSince {
+                ResourceAgeText(createdAt: ageSince)
+            } else {
+                Text(verbatim: value.isEmpty ? "—" : value)
+            }
+        }
+        .lineLimit(1).truncationMode(.middle)
+        .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
+        .help(ageSince?.formatted(date: .abbreviated, time: .standard) ?? value)
+    }
+}
+
+// Each visible age label wakes only when its displayed unit changes.
+private struct ResourceAgeSchedule: TimelineSchedule {
+    let createdAt: Date
+
+    static func unit(for seconds: Int) -> (duration: Int, suffix: String) {
+        switch seconds {
+        case ..<60: return (1, "s")
+        case ..<3600: return (60, "m")
+        case ..<86_400: return (3600, "h")
+        default: return (86_400, "d")
+        }
+    }
+
+    func entries(from startDate: Date, mode: TimelineScheduleMode) -> some Sequence<Date> {
+        sequence(first: startDate) { date in
+            let elapsed = Int(max(0, date.timeIntervalSince(createdAt)))
+            let step = Self.unit(for: elapsed).duration
+            return createdAt.addingTimeInterval(TimeInterval((elapsed / step + 1) * step))
+        }
+    }
+}
+
+struct ResourceAgeText: View {
+    let createdAt: Date
+    var includeDate = false
+
+    var body: some View {
+        if includeDate {
+            HStack(spacing: 4) {
+                relativeTime
+                Text(verbatim: createdAt.formatted(date: .abbreviated, time: .shortened))
+                    .textSelection(.enabled)
+            }
+        } else {
+            relativeTime
+        }
+    }
+
+    private var relativeTime: some View {
+        TimelineView(ResourceAgeSchedule(createdAt: createdAt)) { tick in
+            let elapsed = Int(max(0, tick.date.timeIntervalSince(createdAt)))
+            let unit = ResourceAgeSchedule.unit(for: elapsed)
+            let age = String(elapsed / unit.duration) + unit.suffix
+            Text(verbatim: includeDate ? age + " ago ·" : age)
+        }
     }
 }
 
@@ -335,14 +393,6 @@ extension ResourceRow {
     var namespaceText: String { namespace ?? "" }
     subscript(field index: Int) -> String { values.indices.contains(index) ? values[index] : "" }
     var ageSortValue: TimeInterval { -(createdAt?.timeIntervalSinceReferenceDate ?? -.infinity) }
-    var age: String {
-        guard let createdAt else { return "—" }
-        let seconds = Int(max(0, -createdAt.timeIntervalSinceNow))
-        if seconds < 60 { return "\(seconds)s" }
-        if seconds < 3600 { return "\(seconds / 60)m" }
-        if seconds < 86_400 { return "\(seconds / 3600)h" }
-        return "\(seconds / 86_400)d"
-    }
 }
 
 private struct NamespaceSelector: View {

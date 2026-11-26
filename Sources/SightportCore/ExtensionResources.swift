@@ -5,7 +5,7 @@ public struct CustomResourceType: Hashable, Sendable {
     public let resourceName: String
     public let isNamespaced: Bool
     public let version: String
-    private let versionedName: String
+    let versionedName: String
 
     public init?(definition: ResourceRow) {
         let fields = Dictionary(uniqueKeysWithValues: zip(ResourceKind.customResourceDefinitions.columns, definition.values))
@@ -15,7 +15,7 @@ public struct CustomResourceType: Hashable, Sendable {
               let firstVersion = fields["Served Versions"]?.split(whereSeparator: { $0 == "," || $0.isWhitespace }).first else { return nil }
         let plural = String(definition.name.dropLast(group.count + 1))
         let version = String(firstVersion)
-        // CRD names arrive over the network. Restrict the kubectl resource argument to a single API type.
+        // CRD names arrive over the network. Restrict the resource argument to a single API type.
         let labels = group.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
         guard ([plural, version] + labels).allSatisfy({
             $0.count <= 63 && $0.range(of: #"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?\z"#, options: .regularExpression) != nil
@@ -37,21 +37,11 @@ public struct CustomResourceType: Hashable, Sendable {
             {{range .metadata.ownerReferences}}{{if .controller}}{{urlquery .kind}}/{{urlquery .name}}{{end}}{{end}}
             """#)
     ]
-    fileprivate static let template: String = {
+    static let rowTemplate: String = {
         let metadata = [".metadata.uid", ".metadata.name", ".metadata.namespace", ".metadata.creationTimestamp"]
             .map { ResourceField.value("", $0).template }
-        return "{{range .items}}" + (metadata + fields.map(\.template)).joined(separator: #"{{"\t"}}"#) + #"{{"\n"}}{{end}}"#
+        return (metadata + fields.map(\.template)).joined(separator: #"{{"\t"}}"#)
     }()
-
-    fileprivate func arguments(context: String, namespace: String?) throws -> [String] {
-        guard !context.isEmpty else { throw KubernetesError.missingContext }
-        var args = ["--context=" + context, "--request-timeout=8s", "get", versionedName]
-        if isNamespaced {
-            guard namespace?.isEmpty != true else { throw ResourceReadError.emptyNamespace }
-            args.append(namespace.map { "--namespace=" + $0 } ?? "--all-namespaces")
-        }
-        return args + ["-o", "go-template=" + Self.template]
-    }
 }
 
 public enum HelmReleases {
@@ -76,7 +66,8 @@ public enum HelmReleases {
 extension KubernetesClient {
     public func customResources(_ type: CustomResourceType, in file: URL, context: String,
                                 namespace: String?) async throws -> [ResourceRow] {
-        let args = try type.arguments(context: context, namespace: namespace)
+        let target = ResourceWatchTarget.custom(type)
+        let args = try target.arguments(context: context, namespace: namespace) + ["-o", "go-template=" + target.listTemplate]
         let data = try await run(args, file: file, operation: .customResources(type.resourceName, type.isNamespaced ? namespace : nil))
         return try ResourceRow.decodeList(data, columnCount: CustomResourceType.columns.count)
     }

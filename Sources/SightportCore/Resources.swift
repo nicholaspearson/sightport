@@ -186,14 +186,19 @@ public enum ResourceKind: String, CaseIterable, Hashable, Sendable {
         }
     }
 
-    // kubectl emits only these columns. Escaping each field also keeps literal newlines,
+    // The SDK emits only these columns. Escaping each field also keeps literal newlines,
     // tabs, percent signs, and plus signs in a Lease or CronJob from changing the row layout.
-    var listTemplate: String {
+    var listTemplate: String { "{{range .items}}" + rowTemplate + #"{{"\n"}}{{end}}"# }
+
+    var includesResourceVersion: Bool { self == .configMaps || self == .secrets }
+
+    var rowTemplate: String {
         let metadata = [".metadata.uid", ".metadata.name", ".metadata.namespace", ".metadata.creationTimestamp"]
             .map { ResourceField.value("", $0).template }
         var cells = metadata + fields.map(\.template)
         if self == .pods { cells.append(PodDetails.projection) }
-        return "{{range .items}}" + cells.joined(separator: #"{{"\t"}}"#) + #"{{"\n"}}{{end}}"#
+        if includesResourceVersion { cells.append(ResourceField.value("", ".metadata.resourceVersion").template) }
+        return cells.joined(separator: #"{{"\t"}}"#)
     }
 }
 
@@ -223,14 +228,17 @@ public struct ResourceRow: Identifiable, Hashable, Sendable {
     public let createdAt: Date?
     public let values: [String]
     public let pod: PodDetails?
+    public let resourceVersion: String?
 
-    public init(id: String, name: String, namespace: String?, createdAt: Date?, values: [String], pod: PodDetails? = nil) {
+    public init(id: String, name: String, namespace: String?, createdAt: Date?, values: [String], pod: PodDetails? = nil,
+                resourceVersion: String? = nil) {
         self.id = id
         self.name = name
         self.namespace = namespace
         self.createdAt = createdAt
         self.values = values
         self.pod = pod
+        self.resourceVersion = resourceVersion
     }
 
     static func decodeList(_ data: Data, kind: ResourceKind) throws -> [Self] {
@@ -245,12 +253,10 @@ public struct ResourceRow: Identifiable, Hashable, Sendable {
         guard let text = String(data: data, encoding: .utf8) else { throw ResourceReadError.invalidList }
         let baseCount = 4 + columnCount
         let includesPod = kind == .pods
-        let dateFormatter = ISO8601DateFormatter()
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return try text.split(separator: "\n").map { line in
             let cells = line.split(separator: "\t", omittingEmptySubsequences: false)
-            guard cells.count == baseCount + (includesPod ? 1 : 0) else { throw ResourceReadError.invalidList }
+            let hasVersion = kind?.includesResourceVersion == true
+            guard cells.count == baseCount + ((includesPod || hasVersion) ? 1 : 0) else { throw ResourceReadError.invalidList }
             let fields = try cells.prefix(baseCount).map(unescapeResourceField)
             guard !fields[1].isEmpty else { throw ResourceReadError.invalidList }
             let uid = fields[0], name = fields[1], namespace = fields[2], timestamp = fields[3]
@@ -260,8 +266,9 @@ public struct ResourceRow: Identifiable, Hashable, Sendable {
                                                   ready: values[1], node: values[2]) : nil
             return ResourceRow(id: uid.isEmpty ? namespace + "/" + name : uid, name: name,
                                namespace: namespace.isEmpty ? nil : namespace,
-                               createdAt: dateFormatter.date(from: timestamp) ?? fractionalFormatter.date(from: timestamp),
-                               values: values, pod: pod)
+                               createdAt: try? Date.ISO8601FormatStyle(includingFractionalSeconds: timestamp.contains(".")).parse(timestamp),
+                               values: values, pod: pod,
+                               resourceVersion: hasVersion && !cells[baseCount].isEmpty ? try unescapeResourceField(cells[baseCount]) : nil)
         }
     }
 }
@@ -275,11 +282,12 @@ func unescapeResourceField(_ escaped: Substring) throws -> String {
 }
 
 enum ResourceReadError: LocalizedError {
-    case invalidList, emptyNamespace
+    case invalidList, invalidWatch, emptyNamespace
 
     var errorDescription: String? {
         switch self {
-        case .invalidList: return "The resource list returned by kubectl could not be read."
+        case .invalidWatch: return "The resource watch was interrupted."
+        case .invalidList: return "Sightport could not read the resource list."
         case .emptyNamespace: return "Choose a namespace or select All namespaces."
         }
     }

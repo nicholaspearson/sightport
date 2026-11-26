@@ -13,7 +13,7 @@ final class ResourceTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         config = directory.appendingPathComponent("cluster config")
         try Data().write(to: config)
-        let executable = directory.appendingPathComponent("kubectl")
+        let executable = directory.appendingPathComponent("sightport-kube")
         let script = """
         #!/bin/sh
         printf '%s\\n' "$@" > "$FIXTURE/args"
@@ -25,7 +25,7 @@ final class ResourceTests: XCTestCase {
         """
         try script.write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
-        client = KubernetesClient(environment: ["PATH": directory.path, "FIXTURE": directory.path], homeDirectory: directory)
+        client = KubernetesClient(environment: ["PATH": directory.path, "FIXTURE": directory.path], homeDirectory: directory, sdkExecutable: executable)
         try Data().write(to: directory.appendingPathComponent("output"))
     }
 
@@ -46,7 +46,7 @@ final class ResourceTests: XCTestCase {
             XCTAssertEqual(arguments.contains("--namespace=blue"), kind.isNamespaced)
             XCTAssertFalse(arguments.contains("--all-namespaces"))
             XCTAssertEqual(kind.listTemplate.components(separatedBy: #"{{"\t"}}"#).count,
-                           4 + kind.columns.count + (kind == .pods ? 1 : 0))
+                           4 + kind.columns.count + (kind == .pods || kind.includesResourceVersion ? 1 : 0))
         }
         _ = try await client.resources(.pods, in: config, context: "fixture ctx")
         let allNamespaces = try String(contentsOf: argumentFile, encoding: .utf8)
@@ -65,7 +65,7 @@ final class ResourceTests: XCTestCase {
         XCTAssertNil(usage[PodKey(namespace: "red", name: "job")])
         let allArguments = try String(contentsOf: argumentFile, encoding: .utf8).split(separator: "\n").map(String.init)
         XCTAssertEqual(allArguments, ["--kubeconfig=\(config.path)", "--context=team alpha", "--request-timeout=8s",
-                                      "top", "pods", "--all-namespaces", "--no-headers"])
+                                      "metrics", "--all-namespaces"])
 
         try "worker    1042m   1025Mi\n".write(to: output, atomically: true, encoding: .utf8)
         let scoped = try await client.podMetrics(in: config, context: "team alpha", namespace: "blue")

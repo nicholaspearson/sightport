@@ -13,13 +13,21 @@ public struct KubernetesClient: Sendable {
     private let environment: [String: String]
     private let homeDirectory: URL
     private let timeout: TimeInterval
+    private let sdkExecutable: URL
+
+    private var sdkEnvironment: [String: String] {
+        var values = environment
+        values["SIGHTPORT_PARENT_PID"] = String(getpid())
+        return values
+    }
 
     public init() {
         self.init(environment: ProcessInfo.processInfo.environment,
                   homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
     }
 
-    init(environment: [String: String], homeDirectory: URL, timeout: TimeInterval = 15) {
+    init(environment: [String: String], homeDirectory: URL, timeout: TimeInterval = 15,
+         sdkExecutable: URL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/sightport-kube")) {
         var environment = environment
         let searchPaths = (environment["PATH"] ?? "").components(separatedBy: ":")
             + ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin",
@@ -31,6 +39,7 @@ public struct KubernetesClient: Sendable {
         self.environment = environment
         self.homeDirectory = homeDirectory
         self.timeout = timeout
+        self.sdkExecutable = sdkExecutable
     }
 
     public func defaultSources() -> [URL] {
@@ -49,9 +58,8 @@ public struct KubernetesClient: Sendable {
     }
 
     public func contexts(in file: URL) async throws -> [KubeContext] {
-        // Ask kubectl to emit only context metadata. The users and clusters sections may contain secrets.
-        let arguments = ["config", "view", "-o", "jsonpath-as-json={['current-context','contexts']}"]
-        let output = try await run(arguments, file: file, operation: .discovery)
+        // Read only local context metadata. The users and clusters sections may contain secrets.
+        let output = try await run(["contexts"], file: file, operation: .discovery)
         guard let result = try? JSONDecoder().decode(ContextList.self, from: output) else {
             throw KubernetesError.invalidContexts
         }
@@ -92,7 +100,7 @@ public struct KubernetesClient: Sendable {
         guard !context.isEmpty else { throw KubernetesError.missingContext }
         if namespace?.isEmpty == true { throw ResourceReadError.emptyNamespace }
         let scope = namespace.map { "--namespace=\($0)" } ?? "--all-namespaces"
-        let arguments = ["--context=\(context)", "--request-timeout=8s", "top", "pods", scope, "--no-headers"]
+        let arguments = ["--context=\(context)", "--request-timeout=8s", "metrics", scope]
         let output = try await run(arguments, file: file, operation: .podMetrics)
         return try PodUsage.decodeTable(output, namespace: namespace)
     }
@@ -112,18 +120,17 @@ public struct KubernetesClient: Sendable {
 
     func resourceOutput(_ kind: ResourceKind, in file: URL, context: String,
                         namespace: String?, template: String, fieldSelector: String? = nil) async throws -> Data {
-        guard !context.isEmpty else { throw KubernetesError.missingContext }
-        var arguments = ["--context=\(context)", "--request-timeout=8s", "get", kind.resourceName]
-        if kind.isNamespaced {
-            if let namespace {
-                guard !namespace.isEmpty else { throw ResourceReadError.emptyNamespace }
-                arguments.append("--namespace=\(namespace)")
-            } else { arguments.append("--all-namespaces") }
-        }
-        if let selector = kind.argoLabelSelector { arguments.append("--selector=" + selector) }
+        var arguments = try ResourceWatchTarget.resource(kind).arguments(context: context, namespace: namespace)
         if let fieldSelector { arguments.append("--field-selector=" + fieldSelector) }
         arguments += ["-o", "go-template=" + template]
         return try await run(arguments, file: file, operation: .resources(kind, namespace))
+    }
+
+    public func watchResources(_ target: ResourceWatchTarget, in file: URL, context: String, namespace: String? = nil,
+                               onSnapshot: @escaping @Sendable ([ResourceRow]) async -> Void) async throws {
+        let executable = try executable(for: file)
+        try await streamResourceRows(target, executable: executable, file: file, context: context, namespace: namespace,
+                                     environment: sdkEnvironment, timeout: timeout, onSnapshot: onSnapshot)
     }
 
     public func portForwardNames(_ kind: PortForwardTargetKind, in file: URL, context: String,
@@ -137,12 +144,12 @@ public struct KubernetesClient: Sendable {
     public func openPortForward(in file: URL, context: String, request: PortForwardRequest,
                                 onStatus: @escaping @Sendable (PortForwardStatus) -> Void) throws -> PortForwardSession {
         guard !context.isEmpty, !context.utf8.contains(0) else { throw KubernetesError.missingContext }
-        let executable = try kubectlExecutable(for: file)
+        let executable = try executable(for: file)
         let local = request.localPort.map { String($0) } ?? ""
         let arguments = ["--kubeconfig=\(file.path)", "--context=\(context)", "--namespace=\(request.namespace)",
-                         "port-forward", "--address=127.0.0.1", "--pod-running-timeout=15s",
+                         "port-forward", "--address=127.0.0.1",
                          request.kind.rawValue + "/" + request.name, local + ":" + request.remotePort]
-        return try PortForwardSession(executable: executable, arguments: arguments, environment: environment,
+        return try PortForwardSession(executable: executable, arguments: arguments, environment: sdkEnvironment,
                                       onStatus: onStatus)
     }
 
@@ -154,39 +161,39 @@ public struct KubernetesClient: Sendable {
         guard !namespace.isEmpty, !pod.isEmpty, !container.isEmpty,
               [namespace, pod, container].allSatisfy({ !$0.contains("/") && !$0.utf8.contains(0) }),
               shell.hasPrefix("/"), !shell.utf8.contains(0) else { throw PodTerminalError.invalidTarget }
-        let executable = try kubectlExecutable(for: file)
+        let executable = try executable(for: file)
         let arguments = ["--kubeconfig=\(file.path)", "--context=\(context)", "--namespace=\(namespace)",
                          "exec", "--stdin", "--tty", "--container=\(container)", "pod/\(pod)", "--", shell]
-        var terminalEnvironment = environment
+        var terminalEnvironment = sdkEnvironment
         terminalEnvironment["TERM"] = "xterm-256color"
         return try PodTerminalSession(executable: executable, arguments: arguments, environment: terminalEnvironment,
                                       columns: columns, rows: rows, onOutput: onOutput, onExit: onExit)
     }
 
-    private func kubectlExecutable(for file: URL) throws -> URL {
-        try executable(named: "kubectl", for: file)
-    }
-
-    private func executable(named name: String, for file: URL) throws -> URL {
+    private func executable(for file: URL, helm: Bool = false) throws -> URL {
         let resolvedFile = file.resolvingSymlinksInPath()
         guard file.isFileURL,
               (try? resolvedFile.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
               FileManager.default.isReadableFile(atPath: file.path) else {
             throw KubernetesError.unreadableFile
         }
+        if !helm {
+            guard FileManager.default.isExecutableFile(atPath: sdkExecutable.path) else { throw KubernetesError.missingSDK }
+            return sdkExecutable
+        }
         let executable = environment["PATH", default: ""].split(separator: ":").lazy
-            .map { URL(fileURLWithPath: String($0)).appendingPathComponent(name) }
+            .map { URL(fileURLWithPath: String($0)).appendingPathComponent("helm") }
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
-        guard let executable else { throw name == "helm" ? KubernetesError.missingHelm : KubernetesError.missingKubectl }
+        guard let executable else { throw KubernetesError.missingHelm }
         return executable
     }
 
     func run(_ arguments: [String], file: URL, operation: ClusterReadOperation) async throws -> Data {
-        let executable = try executable(named: operation.command, for: file)
+        let executable = try executable(for: file, helm: operation.usesHelm)
         // Helm's global connection overrides must not silently redirect the selected context.
-        let commandEnvironment = operation.command == "helm"
+        let commandEnvironment = operation.usesHelm
             ? environment.filter { !$0.key.hasPrefix("HELM_KUBE") && $0.key != "HELM_NAMESPACE" }
-            : environment
+            : sdkEnvironment
         let worker = Task.detached(priority: .userInitiated) {
             try runClusterRead(executable: executable, arguments: ["--kubeconfig=\(file.path)"] + arguments,
                                environment: commandEnvironment, operation: operation, timeout: timeout)
@@ -233,14 +240,14 @@ enum ClusterReadOperation {
     case secretDetails, configMapDetails
     case customResources(String, String?), helmReleases
 
-    var command: String {
-        if case .helmReleases = self { return "helm" }
-        return "kubectl"
+    var usesHelm: Bool {
+        if case .helmReleases = self { return true }
+        return false
     }
 }
 
 enum KubernetesError: LocalizedError {
-    case missingKubectl, missingHelm, unreadableFile, launch, invalidContexts, missingContext
+    case missingSDK, missingHelm, unreadableFile, launch, invalidContexts, missingContext
     case helmLaunch, helmUnavailable, helmDenied, customResourceDenied(String), customResourceUnavailable(String)
     case resourceDenied(ResourceKind, String?), unsupported(ResourceKind), namespaceMissing(String)
     case secretDenied, secretMissing, secretUnavailable
@@ -250,7 +257,7 @@ enum KubernetesError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .missingKubectl: return "Install kubectl to read contexts and test connections. Sightport checks your PATH and standard Homebrew locations."
+        case .missingSDK: return "The bundled Kubernetes client is missing. Reinstall Sightport and reopen the app."
         case .missingHelm: return "Install the Helm 3 or 4 command-line tool to view releases. Sightport checks your PATH and standard Homebrew locations."
         case .helmLaunch: return "Sightport could not start Helm. Check that it can run on this Mac."
         case .helmUnavailable: return "Helm could not list releases. Check your connection and Helm installation."
@@ -258,8 +265,8 @@ enum KubernetesError: LocalizedError {
         case .customResourceDenied(let resource): return "Access denied. This context cannot list " + resource + " in the selected scope."
         case .customResourceUnavailable(let resource): return "The API for " + resource + " is unavailable on this cluster. Refresh the custom resource definitions."
         case .unreadableFile: return "The kubeconfig file is missing or unreadable. Choose its current location."
-        case .launch: return "Sightport could not start kubectl. Check that it can run on this Mac."
-        case .invalidContexts: return "kubectl could not read the contexts. Check the kubeconfig file and your kubectl installation."
+        case .launch: return "Sightport could not start its bundled Kubernetes client."
+        case .invalidContexts: return "Sightport could not read the contexts. Check that the file contains a valid kubeconfig."
         case .missingContext: return "This context is missing from the kubeconfig. Choose an available context."
         case .unavailable: return "Could not reach the Kubernetes API. Check the server address, network, and VPN."
         case .secretDenied: return "Access denied. This context cannot get this Secret."
@@ -314,7 +321,8 @@ enum KubernetesError: LocalizedError {
             if let namespace, kind.isNamespaced, message.contains("namespaces"), message.contains("not found") {
                 return .namespaceMissing(namespace)
             }
-            if message.contains("doesn't have a resource type") || message.contains("could not find the requested resource") {
+            if message.contains("doesn't have a resource type") || message.contains("could not find the requested resource")
+                || message.contains("no matches for") {
                 return .unsupported(kind)
             }
         }
@@ -351,11 +359,33 @@ enum KubernetesError: LocalizedError {
     }
 }
 
+// An idle long-lived watch can sleep in poll until the SDK sends new bytes.
+// Closing this private pipe wakes it immediately when its view disappears.
+final class ClusterReadCancellation: @unchecked Sendable {
+    let pipe = Pipe()
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.withLock {
+            guard !cancelled else { return }
+            cancelled = true
+            try? pipe.fileHandleForWriting.close()
+        }
+    }
+
+    func check() throws {
+        if lock.withLock({ cancelled }) { throw CancellationError() }
+    }
+}
+
 // Read both pipes on the worker task. Polling bounds cancellation latency even when an
 // external credential helper hangs with an output descriptor open.
-private func runClusterRead(executable: URL, arguments: [String], environment: [String: String],
-                            operation: ClusterReadOperation, timeout: TimeInterval) throws -> Data {
+func runClusterRead(executable: URL, arguments: [String], environment: [String: String],
+                    operation: ClusterReadOperation, timeout: TimeInterval, cancellation: ClusterReadCancellation? = nil,
+                    onOutput: ((Data) throws -> Void)? = nil, onTick: (() throws -> Int32)? = nil) throws -> Data {
     try Task.checkCancellation()
+    try cancellation?.check()
     let process = Process()
     let stdout = Pipe()
     let stderr = Pipe()
@@ -366,7 +396,7 @@ private func runClusterRead(executable: URL, arguments: [String], environment: [
     process.standardOutput = stdout
     process.standardError = stderr
     do { try process.run() } catch {
-        throw operation.command == "helm" ? KubernetesError.helmLaunch : KubernetesError.launch
+        throw operation.usesHelm ? KubernetesError.helmLaunch : KubernetesError.launch
     }
     defer {
         if process.isRunning {
@@ -374,6 +404,7 @@ private func runClusterRead(executable: URL, arguments: [String], environment: [
             // Foundation typically puts the child in its own process group. Stop any
             // helper in that group too, without targeting the application's group.
             _ = Darwin.kill(getpgid(pid) == pid ? -pid : pid, SIGKILL)
+            process.waitUntilExit()
         }
     }
 
@@ -383,22 +414,31 @@ private func runClusterRead(executable: URL, arguments: [String], environment: [
         let flags = fcntl(descriptor.fd, F_GETFL)
         guard flags >= 0, fcntl(descriptor.fd, F_SETFL, flags | O_NONBLOCK) >= 0 else { throw KubernetesError.launch }
     }
+    if let cancellation {
+        descriptors.append(pollfd(fd: cancellation.pipe.fileHandleForReading.fileDescriptor, events: Int16(POLLIN), revents: 0))
+    }
+    var pollInterval: Int32 = 100
     var buffers = [Data(), Data()]
     var chunk = [UInt8](repeating: 0, count: 16_384)
     let deadline = ProcessInfo.processInfo.systemUptime + timeout
     while true {
         try Task.checkCancellation()
+        try cancellation?.check()
         guard ProcessInfo.processInfo.systemUptime < deadline else { throw KubernetesError.timeout }
         let running = process.isRunning
-        let ready = poll(&descriptors, nfds_t(descriptors.count), running ? 100 : 0)
+        // Pipe EOF can arrive just before Foundation observes process exit. Once
+        // both pipes are drained, don't wait an idle watch interval to report it.
+        let interval = descriptors.prefix(2).allSatisfy { $0.fd < 0 } ? min(pollInterval, 20) : pollInterval
+        let ready = poll(&descriptors, nfds_t(descriptors.count), running ? interval : 0)
         if ready < 0 {
             if errno == EINTR { continue }
             throw KubernetesError.launch
         }
-        for index in descriptors.indices where descriptors[index].fd >= 0 {
+        for index in buffers.indices where descriptors[index].fd >= 0 {
             let descriptor = descriptors[index]
             guard descriptor.revents != 0 || !running else { continue }
-            while true {
+            // Give cancellation, timers and the other pipe a turn under sustained output.
+            for _ in 0..<64 {
                 let count = Darwin.read(descriptor.fd, &chunk, chunk.count)
                 if count == 0 { descriptors[index].fd = -1; break }
                 if count < 0 {
@@ -406,12 +446,17 @@ private func runClusterRead(executable: URL, arguments: [String], environment: [
                     guard errno == EAGAIN || errno == EWOULDBLOCK else { throw KubernetesError.launch }
                     break
                 }
+                if index == 0, let onOutput {
+                    try onOutput(Data(chunk.prefix(count)))
+                    continue
+                }
                 guard buffers[index].count + count <= 4 * 1024 * 1024 else { throw KubernetesError.output }
                 buffers[index].append(contentsOf: chunk.prefix(count))
             }
         }
-        if !running { break }
-        if descriptors.allSatisfy({ $0.fd < 0 }) && !process.isRunning { break }
+        try cancellation?.check()
+        pollInterval = try onTick?() ?? 100
+        if !running && descriptors.prefix(2).allSatisfy({ $0.fd < 0 || $0.revents == 0 }) { break }
     }
     guard process.terminationStatus == 0 else {
         throw KubernetesError.failure(stderr: buffers[1], operation: operation)
