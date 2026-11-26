@@ -15,7 +15,7 @@ After a successful connection, Sightport opens **Namespaces**. Double-click a na
 
 Browsing resources reuses one italicized preview tab. Selecting a row, searching, sorting, or opening logs keeps the tab open. Double-click the tab or choose **Keep Tab Open** from its context menu to keep it explicitly.
 
-Select a **Node** to inspect scheduling, conditions, addresses, capacity and labels. The inspector header offers its YAML manifest, **Drain node…** and **Delete node…**. Draining cordons the node and requests pod evictions subject to disruption budgets. Check the node’s scheduling state after a drain.
+Double-click a **Node** to open its inspector on the right and view scheduling, conditions, addresses, capacity and labels. The inspector header offers its YAML manifest, **Drain node…** and **Delete node…**. Draining cordons the node and requests pod evictions subject to disruption budgets. Check the node’s scheduling state after a drain.
 
 In **Deployments**, choose **View Logs** and use the **Pod** and **Container** selectors in the bottom drawer. **Restart Rollout…** is available on Deployments, DaemonSets and StatefulSets. Under **Cron Jobs**, **Start Job…** creates a one-off run. Under **Jobs**, **Start Job…** resumes a suspended Job and **Run Again…** creates a new Job from the selected run.
 

@@ -7,23 +7,24 @@ struct WorkbenchInspector: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 7) {
-                Image(systemName: "list.bullet.rectangle")
-                    .foregroundStyle(Palette.forest)
-                    .accessibilityHidden(true)
-                Text("Inspector").fontWeight(.medium)
-                Spacer()
-                Button(action: onCollapse) {
-                    Image(systemName: "chevron.down").frame(width: 26, height: 25)
+            Button(action: onCollapse) {
+                HStack(spacing: 7) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .foregroundStyle(Palette.forest)
+                    Text("Inspector").fontWeight(.medium)
+                    Spacer()
+                    Image(systemName: "chevron.down").foregroundStyle(Palette.muted)
+                        .frame(width: 26, height: 25)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Palette.muted)
-                .help("Collapse inspector")
-                .accessibilityLabel("Collapse inspector")
+                .font(.system(size: 12))
+                .padding(.leading, 14).padding(.trailing, 7)
+                .frame(height: 31)
+                .modifier(DisclosureHeaderFeedback())
             }
-            .font(.system(size: 12))
-            .padding(.leading, 14).padding(.trailing, 7)
-            .frame(height: 31)
+            .buttonStyle(.plain)
+            .help("Collapse inspector")
+            .accessibilityLabel("Collapse inspector")
+            .accessibilityValue("Expanded")
             .background(Palette.surface)
 
             Rectangle().fill(Palette.line).frame(height: 1)

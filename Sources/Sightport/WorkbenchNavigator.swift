@@ -373,7 +373,7 @@ struct WorkbenchNavigator: View {
                 Spacer(minLength: 0)
             }
             .foregroundStyle(Palette.ink).padding(.horizontal, 10).frame(height: 28)
-            .contentShape(Rectangle())
+            .modifier(DisclosureHeaderFeedback())
         }
         .buttonStyle(.plain).accessibilityLabel(title)
         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
@@ -390,7 +390,7 @@ struct WorkbenchNavigator: View {
                 Spacer(minLength: 0)
             }
             .foregroundStyle(Palette.muted)
-            .padding(.horizontal, 10).frame(height: 26).contentShape(Rectangle())
+            .padding(.horizontal, 10).frame(height: 26).modifier(DisclosureHeaderFeedback())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)

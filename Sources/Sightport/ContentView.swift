@@ -76,7 +76,17 @@ struct ContentView: View {
             Spacer()
             IconAction(symbol: "folder.badge.plus", title: "Open kubeconfig (⌘O)") { workspace.chooseFile() }
             IconAction(symbol: "arrow.clockwise", title: "Refresh current view (⌘R)") { workspace.refresh() }
-            if usesBottomInspector {
+            if workspace.page == .cluster(.resources(.nodes)) {
+                Rectangle().fill(Palette.line).frame(width: 1, height: 13)
+                IconAction(symbol: "sidebar.right", title: workspace.showsNodeInspector ? "Hide node inspector" : "Show node inspector") {
+                    if workspace.showsNodeInspector {
+                        workspace.closeNodeInspector()
+                    } else if let row = workspace.selectedResource(in: .nodes) {
+                        workspace.inspectNode(row)
+                    }
+                }
+                .disabled(workspace.selectedResource(in: .nodes) == nil)
+            } else if usesBottomInspector {
                 Rectangle().fill(Palette.line).frame(width: 1, height: 13)
                 IconAction(symbol: "rectangle.bottomthird.inset.filled",
                            title: showsInspector ? "Hide inspector" : "Show inspector") { showsInspector.toggle() }
@@ -89,7 +99,7 @@ struct ContentView: View {
 
     private var usesBottomInspector: Bool {
         switch workspace.page {
-        case .cluster(.resources(.pods)), .cluster(.argoDashboard), .cluster(.portForwarding):
+        case .cluster(.resources(.pods)), .cluster(.resources(.nodes)), .cluster(.argoDashboard), .cluster(.portForwarding):
             return false
         default: return workspace.page.configDataKind == nil
         }
@@ -114,6 +124,13 @@ struct ContentView: View {
                 workspaceWithDrawer { width in
                     resourceSplit(.pods, width: width) { row in
                         PodInspector(workspace: workspace, row: row) { workspace.select(nil) }
+                    }
+                }
+                .id(workspace.connectedContext)
+            } else if workspace.page == .cluster(.resources(.nodes)) {
+                GeometryReader { area in
+                    resourceSplit(.nodes, width: area.size.width, showsDetails: workspace.showsNodeInspector) { _ in
+                        ClusterResourceInspector(workspace: workspace)
                     }
                 }
                 .id(workspace.connectedContext)
@@ -153,17 +170,23 @@ struct ContentView: View {
         workspace.portForwards.stopAll()
     }
 
-    private func resourceSplit<Details: View>(_ kind: ResourceKind, width: CGFloat,
+    private func resourceSplit<Details: View>(_ kind: ResourceKind, width: CGFloat, showsDetails: Bool = true,
                                               @ViewBuilder details: (ResourceRow) -> Details) -> some View {
         let tableMinimum = min(300, max(218, width - 274))
         let detailsMinimum = min(272, max(220, width - tableMinimum - 1))
+        let detailsWidth = kind == .nodes ? min(520, width * 0.41) : width * 0.41
         return HSplitView {
             ClusterResourceTable(workspace: workspace, section: .resources(kind))
-                .frame(minWidth: tableMinimum, idealWidth: width * 0.59, maxWidth: .infinity, maxHeight: .infinity)
-            if let row = workspace.selectedResource(in: kind) {
-                details(row).id(row.id)
-                    .frame(minWidth: detailsMinimum, idealWidth: max(detailsMinimum, width * 0.41),
-                           maxWidth: max(detailsMinimum, width - tableMinimum - 1), maxHeight: .infinity)
+                .frame(minWidth: tableMinimum, idealWidth: width - detailsWidth, maxWidth: .infinity, maxHeight: .infinity)
+            if showsDetails, let row = workspace.selectedResource(in: kind) {
+                VStack(spacing: 0) {
+                    details(row).id(row.id)
+                }
+                .frame(minWidth: detailsMinimum, idealWidth: max(detailsMinimum, detailsWidth),
+                       maxWidth: max(detailsMinimum, width - tableMinimum - 1), maxHeight: .infinity)
+                .background {
+                    if kind == .nodes { InitialInspectorWidth(width: detailsWidth) }
+                }
             }
         }
     }
@@ -214,8 +237,11 @@ struct ContentView: View {
                         Image(systemName: "chevron.up").font(.system(size: 10))
                     }.font(.system(size: 11.5))
                         .padding(.horizontal, 13).frame(height: 29)
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain).background(Palette.surface).help("Show inspector")
+                        .modifier(DisclosureHeaderFeedback())
+                }
+                .buttonStyle(.plain).background(Palette.surface).help("Show inspector")
+                .accessibilityLabel("Expand inspector")
+                .accessibilityValue("Collapsed")
             }
         }
     }
@@ -336,6 +362,30 @@ private struct WorkspaceTab: View {
         if case .cluster(.customResources(let type)) = tab { return type.resourceName + " · " + type.version }
         return workspace.previewTab == tab ? tab.title + " · Preview. Double-click to keep open." : tab.title
     }
+}
+
+// HSplitView inserts a newly opened pane at its minimum width. Set the initial
+// divider position once, then leave subsequent sizing to the native splitter.
+private struct InitialInspectorWidth: NSViewRepresentable {
+    let width: CGFloat
+
+    func makeNSView(context: Context) -> NSView {
+        let marker = NSView()
+        DispatchQueue.main.async {
+            var ancestor = marker.superview
+            while let view = ancestor {
+                if let split = view as? NSSplitView, split.isVertical, split.arrangedSubviews.count == 2,
+                   marker.isDescendant(of: split.arrangedSubviews[1]) {
+                    split.setPosition(split.bounds.width - width - split.dividerThickness, ofDividerAt: 0)
+                    return
+                }
+                ancestor = view.superview
+            }
+        }
+        return marker
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
 }
 
 private struct WindowDragSurface: NSViewRepresentable {

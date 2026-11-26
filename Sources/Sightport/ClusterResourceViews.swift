@@ -48,7 +48,7 @@ struct ClusterResourceTable: View {
             !workspace.rows.isEmpty && $0.options.showsSameResources(as: options) ? $0 : nil
         }
         GeometryReader { area in
-            resourceList(compact: (kind == .pods || workspace.page.configDataKind != nil) && area.size.width < 425,
+            resourceList(compact: (kind == .pods || kind == .nodes || workspace.page.configDataKind != nil) && area.size.width < 425,
                          data: current, filter: options.query)
         }
         .onChange(of: checkedPods) { _, ids in
@@ -238,7 +238,9 @@ struct ClusterResourceTable: View {
                                  scrollID: AnyHashable(data?.options), columns: resourceColumns,
                                  selection: selection, sortOrder: $settings.sort, onInteraction: { workspace.keepTabOpen(page) }, menu: { row in
             let menu = NSMenu()
-            if kind == .namespaces {
+            if kind == .nodes {
+                menu.addAction("Inspect node") { workspace.inspectNode(row) }
+            } else if kind == .namespaces {
                 menu.addAction("View pods in " + row.name) { showPods(in: row.name) }
             } else if kind == .customResourceDefinitions, let type = CustomResourceType(definition: row) {
                 menu.addAction("View instances") { workspace.openCluster(.customResources(type)) }
@@ -253,7 +255,9 @@ struct ClusterResourceTable: View {
             }
             return menu.items.isEmpty ? nil : menu
         }, doubleClick: { row in
-            if kind == .namespaces {
+            if kind == .nodes {
+                workspace.inspectNode(row)
+            } else if kind == .namespaces {
                 showPods(in: row.name)
             } else if kind == .customResourceDefinitions, let type = CustomResourceType(definition: row) {
                 workspace.openCluster(.customResources(type))
@@ -548,7 +552,22 @@ struct ClusterResourceInspector: View {
     var body: some View {
         if case .cluster(let section) = workspace.page, case .resource(let id) = workspace.selection,
            let row = workspace.resourceRow(id: id) {
-            resourceDetails(section, row: row)
+            VStack(spacing: 0) {
+                if section.listKind == .nodes, let context = workspace.connectedContext {
+                    HStack(spacing: 5) {
+                        Label("Node", systemImage: "server.rack")
+                            .font(.system(size: 12, weight: .semibold))
+                        Spacer(minLength: 0)
+                        NodeActionsView(context: context, row: row)
+                        Divider().frame(height: 14)
+                        IconAction(symbol: "xmark", title: "Close node details") { workspace.closeNodeInspector() }
+                    }
+                    .padding(.leading, 14).padding(.trailing, 6).frame(height: 39)
+                    .background(Palette.surface)
+                    Divider()
+                }
+                resourceDetails(section, row: row)
+            }
         } else {
             let overview = workspace.page == .cluster(.overview)
             Label(overview ? "Choose a workload type to browse its resources." : "Select a resource to inspect its details.",
@@ -564,13 +583,10 @@ struct ClusterResourceInspector: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
-                    Image(systemName: "shippingbox").foregroundStyle(Palette.forest)
-                    Text(verbatim: row.name).font(.system(size: 14, weight: .semibold))
-                        .lineLimit(1).truncationMode(.middle).help(row.name).textSelection(.enabled)
+                    if kind != .nodes { Image(systemName: "shippingbox").foregroundStyle(Palette.forest) }
+                    Text(verbatim: row.name).font(.system(size: kind == .nodes ? 17 : 14, weight: .semibold))
+                        .lineLimit(kind == .nodes ? nil : 1).truncationMode(.middle).help(row.name).textSelection(.enabled)
                     Spacer()
-                    if kind == .nodes, let context = workspace.connectedContext {
-                        NodeActionsView(context: context, row: row).id(row.id).id(context)
-                    }
                     if kind == .deployments {
                         Button("View Logs") { workspace.openDeploymentLogs(row) }.controlSize(.small)
                     }

@@ -1,7 +1,19 @@
 import SightportCore
 import SwiftUI
 
+private enum WorkbenchContentSizeKey: EnvironmentKey {
+    static let defaultValue = CGSize(width: 1160, height: 725)
+}
+
+extension EnvironmentValues {
+    var workbenchContentSize: CGSize {
+        get { self[WorkbenchContentSizeKey.self] }
+        set { self[WorkbenchContentSizeKey.self] = newValue }
+    }
+}
+
 struct ResourceManifestButton: View {
+    @Environment(\.workbenchContentSize) private var workbenchSize
     let context: ContextID
     let kind: InspectableResource
     let row: ResourceRow
@@ -10,7 +22,7 @@ struct ResourceManifestButton: View {
     var body: some View {
         IconAction(symbol: "doc.text.magnifyingglass", title: "View YAML manifest") { showing = true }
             .sheet(isPresented: $showing) {
-                ManifestSheet(context: context, kind: kind, row: row)
+                ManifestSheet(context: context, kind: kind, row: row, workbenchSize: workbenchSize)
             }
     }
 }
@@ -20,25 +32,50 @@ private struct ManifestSheet: View {
     let context: ContextID
     let kind: InspectableResource
     let row: ResourceRow
-    @State private var result: Result<String, Error>?
+    let workbenchSize: CGSize
+    @State private var result: Result<(source: String, lineCount: Int), Error>?
     @State private var attempt = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
+        if #available(macOS 15.0, *) {
+            reader.presentationSizing(.fitted)
+        } else {
+            reader
+        }
+    }
+
+    private var reader: some View {
+        let width = min(1120, floor(workbenchSize.width * 0.86))
+        let height = min(760, floor(workbenchSize.height * 0.80), floor(width * 0.70))
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Palette.forest)
+                    .frame(width: 34, height: 34)
+                    .background(Palette.selection, in: RoundedRectangle(cornerRadius: 7))
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("YAML manifest").font(.headline)
-                    Text(verbatim: [context.name, row.namespace, row.name].compactMap { $0 }.joined(separator: " / "))
-                        .foregroundStyle(Palette.muted).lineLimit(1).truncationMode(.middle).help(row.name)
+                    Text(verbatim: row.name)
+                        .font(.system(size: 15, weight: .semibold))
+                        .lineLimit(1).truncationMode(.middle).help(row.name)
+                        .accessibilityAddTraits(.isHeader)
+                    let location = [context.name, row.namespace].compactMap { $0 }.joined(separator: " / ")
+                    Text(verbatim: "YAML manifest · " + location)
+                        .font(.system(size: 11.5)).foregroundStyle(Palette.muted)
+                        .lineLimit(1).truncationMode(.middle).help(location)
                 }
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
-            .padding(14)
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .background(Palette.surface)
             Divider()
             switch result {
-            case .success(let yaml):
-                ScrollableConfigValue(value: yaml, key: row.name, lineCount: yaml.utf8.reduce(1) { $1 == 10 ? $0 + 1 : $0 })
+            case .success(let document):
+                ScrollableConfigValue(value: document.source, key: row.name, lineCount: document.lineCount,
+                                      highlightsYAML: true)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failure(let error):
                 VStack(spacing: 10) {
                     Text(error.localizedDescription)
@@ -49,12 +86,16 @@ private struct ManifestSheet: View {
             }
         }
         .font(.system(size: 12)).foregroundStyle(Palette.ink).background(Palette.canvas)
-        .frame(minWidth: 480, idealWidth: 730, minHeight: 320, idealHeight: 520)
+        .frame(minWidth: min(560, width), idealWidth: width, maxWidth: .infinity,
+               minHeight: min(320, height), idealHeight: height, maxHeight: .infinity)
         .task(id: attempt) {
-            let next: Result<String, Error>
-            do { next = .success(try await KubernetesClient().manifest(for: kind, row: row, context: context)) }
-            catch { next = .failure(error) }
-            if !Task.isCancelled { result = next }
+            do {
+                let source = try await KubernetesClient().manifest(for: kind, row: row, context: context)
+                guard !Task.isCancelled else { return }
+                result = .success((source, source.utf8.reduce(1) { $1 == 10 ? $0 + 1 : $0 }))
+            } catch {
+                if !Task.isCancelled { result = .failure(error) }
+            }
         }
     }
 }
@@ -151,6 +192,7 @@ struct NodeInspectionView: View {
                             ForEach(labels.keys.sorted(), id: \.self) { key in field(key, labels[key]) }
                         }.padding(.top, 4)
                     }
+                    .disclosureGroupStyle(InspectorDisclosureStyle())
                 }
             }
         }

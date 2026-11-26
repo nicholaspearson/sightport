@@ -192,6 +192,7 @@ final class Workspace: ObservableObject {
     @Published var alert: WorkspaceAlert?
 
     @Published private(set) var connectedContext: ContextID?
+    @Published private(set) var showsNodeInspector = false
     @Published private var resourceRows = WorkspaceResourceRows() {
         didSet { rowsRevision &+= 1 }
     }
@@ -280,6 +281,7 @@ final class Workspace: ObservableObject {
     }
 
     private func forgetTabState(_ tab: WorkbenchPage) {
+        if tab == .cluster(.resources(.nodes)) { closeNodeInspector() }
         tabSelections.removeValue(forKey: tab)
         if case .cluster(let section) = tab { savedTableSettings.removeValue(forKey: section) }
     }
@@ -327,6 +329,7 @@ final class Workspace: ObservableObject {
     }
 
     func select(_ item: WorkbenchItem?) {
+        if item == nil, page == .cluster(.resources(.nodes)) { closeNodeInspector() }
         if case .workload(let request) = alert?.action, item != .resource(request.target.uid) {
             alert = nil
             workloadNotice = WorkloadNotice(message: "The selected workload changed. Select it again to continue.", failed: true)
@@ -456,7 +459,7 @@ final class Workspace: ObservableObject {
         case .cluster:
             if case .resource(let id) = previous, resourceRow(id: id) != nil {
                 select(previous)
-            } else if page == .cluster(.resources(.pods)) || page.configDataKind != nil {
+            } else if page == .cluster(.resources(.pods)) || page == .cluster(.resources(.nodes)) || page.configDataKind != nil {
                 select(nil)
             } else { select(rows.first.map { .resource($0.id) }) }
         case .files:
@@ -590,6 +593,7 @@ extension Workspace {
     }
 
     private func endCluster() {
+        closeNodeInspector()
         stopCustomResourceObservation()
         applyCustomResourceCatalog([])
         dismissPodTerminationPrompt()
@@ -921,6 +925,17 @@ extension Workspace {
         select(.resource(row.id))
     }
 
+    func inspectNode(_ row: ResourceRow) {
+        guard page == .cluster(.resources(.nodes)), resourceRow(id: row.id) != nil else { return }
+        keepTabOpen()
+        select(.resource(row.id))
+        showsNodeInspector = true
+    }
+
+    func closeNodeInspector() {
+        if showsNodeInspector { showsNodeInspector = false }
+    }
+
     func isChangingWorkload(_ row: ResourceRow, kind: ResourceKind) -> Bool {
         guard let context = connectedContext else { return false }
         return activeWorkloadRequests.contains(.init(context: context, kind: kind, uid: row.id))
@@ -1119,7 +1134,7 @@ extension Workspace {
         keepTabOpen()
         linkedResource = LinkedResource(name: name, namespace: namespace, uid: uid)
         if !resourceLoading { finishResourceSelection() }
-        defaults.set(true, forKey: "showInspector")
+        if kind != .nodes { defaults.set(true, forKey: "showInspector") }
     }
 
     private func finishResourceSelection() {
@@ -1129,7 +1144,11 @@ extension Workspace {
         let match = rows.first { row in
             row.name == target.name && row.namespace == target.namespace && (target.uid == nil || row.id == target.uid)
         }
-        select(match.map { .resource($0.id) })
+        if page == .cluster(.resources(.nodes)), let match {
+            inspectNode(match)
+        } else {
+            select(match.map { .resource($0.id) })
+        }
         if match == nil {
             alert = WorkspaceAlert(message: "The linked resource “" + target.name + "” is no longer in this list.")
         }

@@ -190,20 +190,7 @@ private struct ConfigMapContent: View {
 
     @ViewBuilder private func metadata(_ title: String, _ entries: [String: String],
                                         expanded: Binding<Bool>) -> some View {
-        GridRow {
-            Text(title).foregroundStyle(Palette.muted)
-            Button { expanded.wrappedValue.toggle() } label: {
-                HStack(spacing: 5) {
-                    Text(entries.count.formatted())
-                    Image(systemName: expanded.wrappedValue ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .medium))
-                }
-            }
-            .buttonStyle(.plain).disabled(entries.isEmpty).foregroundStyle(entries.isEmpty ? Palette.muted : Palette.ink)
-            .accessibilityLabel(title)
-            .accessibilityValue("\(entries.count), " + (expanded.wrappedValue ? "expanded" : "collapsed"))
-        }
-        if expanded.wrappedValue {
+        DisclosureGroup(isExpanded: expanded) {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(entries.keys.sorted(), id: \.self) { key in
                     let value = entries[key] ?? ""
@@ -217,8 +204,16 @@ private struct ConfigMapContent: View {
                     }
                 }
             }
-            .gridCellColumns(2)
+        } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(entries.count.formatted()).monospacedDigit().foregroundStyle(Palette.muted)
+            }
         }
+        .gridCellColumns(2)
+        .disclosureGroupStyle(InspectorDisclosureStyle())
+        .disabled(entries.isEmpty)
     }
 }
 
@@ -255,8 +250,11 @@ private struct ConfigValueText: View {
     var body: some View {
         let count = value.reduce(1) { $1.isNewline ? $0 + 1 : $0 }
         let visibleLines = numbered || value.utf8.count < 256 ? min(count, 10) : 8
-        let height = CGFloat(visibleLines) * ConfigLineRuler.lineHeight + 14
-        ScrollableConfigValue(value: value, key: key, lineCount: numbered ? count : nil)
+        let ext = (key as NSString).pathExtension.lowercased()
+        let yaml = numbered && (ext == "yaml" || ext == "yml")
+        let height = CGFloat(visibleLines) * ConfigLineRuler.lineHeight + (yaml ? 20 : 14)
+        ScrollableConfigValue(value: value, key: key, lineCount: numbered ? count : nil,
+                              highlightsYAML: yaml)
             .frame(height: height)
             .clipped()
     }
@@ -274,6 +272,8 @@ final class ConfigLineRuler: NSRulerView {
     override var isFlipped: Bool { true }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
+        NSColor(Palette.surface).setFill()
+        rect.fill()
         guard let view = clientView as? NSTextView else { return }
         let startY = convert(view.textContainerOrigin, from: view).y
         let first = max(0, Int(floor((rect.minY - startY) / Self.lineHeight)))
@@ -297,6 +297,19 @@ struct ScrollableConfigValue: NSViewRepresentable {
     let value: String
     let key: String
     var lineCount: Int? = nil
+    var highlightsYAML = false
+
+    final class Coordinator {
+        var value: String?
+        var highlightsYAML = false
+        var task: Task<Void, Never>?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        coordinator.task?.cancel()
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSTextView.scrollableTextView()
@@ -318,7 +331,7 @@ struct ScrollableConfigValue: NSViewRepresentable {
                 view.textContainer?.widthTracksTextView = false
                 view.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                                                           height: CGFloat.greatestFiniteMagnitude)
-                view.textContainerInset = NSSize(width: 2, height: 6)
+                view.textContainerInset = highlightsYAML ? NSSize(width: 8, height: 10) : NSSize(width: 2, height: 6)
                 let style = NSMutableParagraphStyle()
                 style.minimumLineHeight = ConfigLineRuler.lineHeight
                 style.maximumLineHeight = ConfigLineRuler.lineHeight
@@ -336,11 +349,62 @@ struct ScrollableConfigValue: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let view = scroll.documentView as? NSTextView, view.string != value else { return }
-        view.string = value
+        guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage else { return }
+        let state = context.coordinator
+        guard state.value != value || state.highlightsYAML != highlightsYAML else { return }
+        state.task?.cancel()
+        state.value = value
+        state.highlightsYAML = highlightsYAML
+        view.setAccessibilityLabel("Value for " + key)
         if let ruler = scroll.verticalRulerView as? ConfigLineRuler, let lineCount {
             ruler.lineCount = lineCount
         }
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .foregroundColor: NSColor(Palette.ink)
+        ]
+        if let paragraph = view.defaultParagraphStyle { attributes[.paragraphStyle] = paragraph }
+        let plain = NSAttributedString(string: value, attributes: attributes)
+        storage.setAttributedString(plain)
         view.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        guard highlightsYAML && !value.isEmpty else { return }
+        state.task = Task { @MainActor [weak scroll, weak view] in
+            guard let colored = await YAMLSyntaxColors.highlight(plain),
+                  !Task.isCancelled, let view, let scroll else { return }
+            // Applying colors can finish after a selection, a find, or a scroll.
+            let selection = view.selectedRanges
+            let origin = scroll.contentView.bounds.origin
+            view.textStorage?.setAttributedString(colored)
+            view.selectedRanges = selection
+            scroll.contentView.scroll(to: origin)
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+    }
+}
+
+private enum YAMLSyntaxColors {
+    // Sightport supplies a dark canvas in both system appearances.
+    static let colors: [YAMLSyntaxToken.Kind: NSColor] = [
+        .key: NSColor(Color(rgb: 0x92C9F4)),
+        .string: NSColor(Color(rgb: 0xB9DEBF)),
+        .number: NSColor(Color(rgb: 0xF0BB8D)),
+        .literal: NSColor(Color(rgb: 0xD3B3EC)),
+        .comment: NSColor(Palette.muted),
+        .indicator: NSColor(Color(rgb: 0xBAC5CE))
+    ]
+
+    static func highlight(_ plain: NSAttributedString) async -> NSAttributedString? {
+        let tokens = YAMLSyntaxToken.tokens(in: plain.string)
+        guard !Task.isCancelled else { return nil }
+        let text = NSMutableAttributedString(attributedString: plain)
+        text.beginEditing()
+        defer { text.endEditing() }
+        for token in tokens {
+            if Task.isCancelled { return nil }
+            if let color = colors[token.kind] {
+                text.addAttribute(.foregroundColor, value: color, range: token.range)
+            }
+        }
+        return text
     }
 }

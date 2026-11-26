@@ -9,10 +9,13 @@ struct SightportApp: App {
 
     var body: some Scene {
         Window("Sightport", id: "workspace") {
-            ContentView()
-                .environmentObject(workspace)
-                .frame(minWidth: 850, minHeight: 520)
-                .preferredColorScheme(.dark)
+            GeometryReader { window in
+                ContentView()
+                    .environmentObject(workspace)
+                    .environment(\.workbenchContentSize, window.size)
+            }
+            .frame(minWidth: 850, minHeight: 520)
+            .preferredColorScheme(.dark)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1160, height: 725)

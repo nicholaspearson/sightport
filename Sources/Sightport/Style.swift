@@ -40,6 +40,59 @@ struct IconAction: View {
     }
 }
 
+struct InspectorDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                configuration.isExpanded.toggle()
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 10)
+                        .accessibilityHidden(true)
+                    configuration.label
+                }
+                .padding(.horizontal, 6)
+                .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+                .modifier(DisclosureHeaderFeedback())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            if configuration.isExpanded {
+                configuration.content.padding(.leading, 6)
+            }
+        }
+    }
+}
+
+struct DisclosureHeaderFeedback: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovered = false
+    @State private var handPushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(hovered && isEnabled ? Palette.rowHover : .clear, in: RoundedRectangle(cornerRadius: 4))
+            .contentShape(Rectangle())
+            .onHover { inside in
+                hovered = inside
+                showHand(inside && isEnabled)
+            }
+            .onChange(of: isEnabled) { _, enabled in showHand(hovered && enabled) }
+            .onDisappear {
+                hovered = false
+                showHand(false)
+            }
+    }
+
+    private func showHand(_ show: Bool) {
+        guard handPushed != show else { return }
+        handPushed = show
+        if show { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+    }
+}
+
 struct TableRowHover: NSViewRepresentable {
     func makeNSView(context: Context) -> Anchor { Anchor() }
     func updateNSView(_ view: Anchor, context: Context) { view.attachToRow() }
