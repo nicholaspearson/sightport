@@ -1,8 +1,15 @@
 import AppKit
+import Accessibility
 import SightportCore
 import SwiftUI
 
 extension PodDetails {
+    fileprivate var statusColor: Color {
+        if status == "Failed" { return .red }
+        if warning != nil { return .orange }
+        return status == "Running" || status == "Succeeded" ? Palette.forest : Palette.muted
+    }
+
     func matches(_ query: String) -> Bool {
         [status, warning, controllerKind, controllerName, node, qos]
             .contains { $0?.localizedCaseInsensitiveContains(query) == true }
@@ -14,10 +21,11 @@ private extension ResourceRow {
     var qualifiedPodName: String { namespace.map { $0 + "/" + name } ?? name }
 }
 
-private func copyPodNames(_ rows: [ResourceRow]) {
-    guard !rows.isEmpty else { return }
+@discardableResult
+private func copyPodNames(_ rows: [ResourceRow]) -> Bool {
+    guard !rows.isEmpty else { return false }
     NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(rows.map(\.qualifiedPodName).joined(separator: "\n"), forType: .string)
+    return NSPasteboard.general.setString(rows.map(\.qualifiedPodName).joined(separator: "\n"), forType: .string)
 }
 
 struct PodSelectionControls: View {
@@ -324,17 +332,8 @@ private struct PodStatus: View {
 
     var body: some View {
         Text(verbatim: pod?.status ?? "—")
-            .font(.system(size: 11.5, weight: .medium)).foregroundStyle(color)
+            .font(.system(size: 11.5, weight: .medium)).foregroundStyle(pod?.statusColor ?? Palette.muted)
             .lineLimit(1).truncationMode(.tail).help(pod?.warning ?? pod?.status ?? "")
-    }
-
-    private var color: Color {
-        if pod?.warning != nil { return .orange }
-        switch pod?.status {
-        case "Running", "Succeeded": return Palette.forest
-        case "Failed": return .red
-        default: return Palette.muted
-        }
     }
 }
 
@@ -345,187 +344,308 @@ struct PodInspector: View {
 
     @State private var labelsExpanded = false
     @State private var annotationsExpanded = false
+    @State private var copySucceeded: Bool?
+    @State private var copyAttempt = 0
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                Text("Pod").foregroundStyle(Palette.muted)
-                Text(verbatim: row.name).fontWeight(.semibold)
-                    .lineLimit(1).truncationMode(.middle).help(row.qualifiedPodName)
-                Spacer(minLength: 4)
-                IconAction(symbol: "text.alignleft", title: "View logs") { workspace.openPodLogs(row) }
-                    .disabled(row.namespace == nil || row.pod?.containers.isEmpty != false)
-                IconAction(symbol: "terminal", title: "Open terminal") { workspace.openPodTerminal(row) }
-                    .disabled(row.runningContainerNames.isEmpty)
-                IconAction(symbol: "doc.on.doc", title: "Copy namespace/name") { copyPodNames([row]) }
-                IconAction(symbol: "trash", title: workspace.isTerminatingPod(row) ? "Termination requested" : "Terminate Pod…") {
-                    workspace.requestPodTermination(row)
-                }
-                .disabled(!workspace.canTerminatePod(row))
-                IconAction(symbol: "xmark", title: "Close pod details", action: onClose)
-            }
-            .padding(.leading, 14).padding(.trailing, 6).frame(height: 43)
-            .background(Palette.surface)
+            toolbar
             Divider()
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    metrics
-                    Divider()
-                    VStack(alignment: .leading, spacing: 0) {
-                        heading("Properties").padding(.bottom, 7)
-                        properties
-                    }
-                    .padding(14)
-                    if let containers = row.pod?.containers, !containers.isEmpty, let context = workspace.connectedContext {
-                        Divider()
-                        PodInspectedContainers(context: context, row: row, containers: containers).id(context)
+                VStack(alignment: .leading, spacing: 16) {
+                    identity
+                    if let pod = row.pod {
+                        health(pod)
+                        properties(pod)
+                        if !pod.containers.isEmpty, let context = workspace.connectedContext {
+                            PodInspectedContainers(context: context, row: row, containers: pod.containers)
+                                .id(context)
+                        }
+                        metadata(pod)
                     }
                 }
+                .padding(14)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
         .font(.system(size: 12)).foregroundStyle(Palette.ink)
         .background(Palette.canvas)
+        .disclosureGroupStyle(PodDisclosureStyle())
+        .task(id: copyAttempt) {
+            guard copySucceeded != nil else { return }
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            copySucceeded = nil
+        }
     }
 
-    private func heading(_ title: String) -> some View {
-        Text(title).font(.system(size: 15, weight: .semibold))
-            .accessibilityAddTraits(.isHeader)
-    }
-
-    private var metrics: some View {
-        let usage = row.namespace.flatMap { workspace.podMetrics[PodKey(namespace: $0, name: row.name)] }
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                heading("Metrics")
-                Spacer()
-                if usage != nil {
-                    Text("Latest sample").font(.system(size: 10.5)).foregroundStyle(Palette.muted)
-                }
-            }
-            if let usage {
-                HStack(spacing: 12) {
-                    reading("CPU", value: usage.cpuText)
-                    Divider().frame(height: 30)
-                    reading("Memory", value: usage.memoryText)
-                }
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(Palette.surface, in: RoundedRectangle(cornerRadius: 5))
-                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Palette.line))
-            } else if workspace.podMetricsLoading {
-                HStack(spacing: 7) {
-                    ProgressView().controlSize(.small)
-                    Text("Loading pod metrics…").foregroundStyle(Palette.muted)
-                }
+    private var toolbar: some View {
+        HStack(spacing: 2) {
+            if let copySucceeded {
+                Text(copySucceeded ? "Copied" : "Copy failed")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(copySucceeded ? Palette.forest : .orange)
             } else {
-                Label(workspace.podMetricsError ?? "No usage sample for this pod.", systemImage: "gauge.with.dots.needle.0percent")
-                    .foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
+                Label("Pod", systemImage: "cube")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
             }
+            Spacer(minLength: 2)
+            IconAction(symbol: "text.alignleft", title: "View logs") { workspace.openPodLogs(row) }
+                .disabled(row.namespace == nil || row.pod?.containers.isEmpty != false)
+            IconAction(symbol: "terminal", title: "Open terminal") { workspace.openPodTerminal(row) }
+                .disabled(row.runningContainerNames.isEmpty)
+            IconAction(symbol: copySucceeded.map { $0 ? "checkmark" : "exclamationmark.triangle" } ?? "doc.on.doc",
+                       title: "Copy namespace/name") {
+                let succeeded = copyPodNames([row])
+                copySucceeded = succeeded
+                copyAttempt += 1
+                AccessibilityNotification.Announcement(succeeded ? "Pod name copied" : "Couldn’t copy the pod name").post()
+            }
+            IconAction(symbol: "trash", title: workspace.isTerminatingPod(row) ? "Termination requested" : "Terminate Pod…") {
+                workspace.requestPodTermination(row)
+            }
+            .disabled(!workspace.canTerminatePod(row))
+            Divider().frame(height: 14).padding(.horizontal, 3)
+            IconAction(symbol: "xmark", title: "Close pod details", action: onClose)
         }
-        .padding(14)
+        .padding(.leading, 14).padding(.trailing, 6).frame(height: 39)
+        .background(Palette.surface)
     }
 
-    private func reading(_ title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 11)).foregroundStyle(Palette.muted)
-            Text(verbatim: value).font(.system(size: 16, weight: .medium)).monospacedDigit()
-                .textSelection(.enabled)
+    private var identity: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(verbatim: row.name)
+                .font(.system(size: 17, weight: .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled).accessibilityAddTraits(.isHeader)
+            if let namespace = row.namespace {
+                Button { workspace.showNamespace(of: row) } label: {
+                    Label { Text(verbatim: namespace) } icon: { Image(systemName: "square.stack.3d.up") }
+                }
+                .buttonStyle(.plain).foregroundStyle(Palette.forest)
+                .help("Show namespace " + namespace).accessibilityLabel("Namespace " + namespace)
+            }
         }
+    }
+
+    private func health(_ pod: PodDetails) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 14) {
+                    status(pod).fixedSize()
+                    Spacer(minLength: 2)
+                    counters(pod)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    status(pod)
+                    counters(pod)
+                }
+            }
+            if let warning = pod.warning, warning != pod.status,
+               !pod.containers.contains(where: { $0.name + " · " + pod.status == warning }) {
+                Text(verbatim: warning).foregroundStyle(.orange).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Divider()
+            metrics
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.surface, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Palette.line))
     }
 
-    @ViewBuilder private var properties: some View {
-        if let date = row.createdAt {
-            field("Created") {
-                ResourceAgeText(createdAt: date, includeDate: true)
-                    .help(date.formatted(date: .complete, time: .complete))
+    private func status(_ pod: PodDetails) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            caption("Status")
+            HStack(spacing: 5) {
+                Image(systemName: pod.warning == nil ? "circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: pod.warning == nil ? 7 : 11))
+                Text(verbatim: pod.status).font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(pod.statusColor)
+            .help(pod.warning ?? pod.status)
+        }
+    }
+
+    private func counters(_ pod: PodDetails) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                caption("Ready")
+                Text("\(pod.readyCount)/\(pod.readinessContainerCount)")
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                caption("Restarts")
+                Text(pod.restartCount.formatted())
             }
         }
-        field("Name") { Text(verbatim: row.name).textSelection(.enabled) }
-        if let ns = row.namespace {
-            field("Namespace") { PodLink(value: ns, wraps: true) { workspace.showNamespace(of: row) } }
+        .font(.system(size: 13, weight: .semibold)).monospacedDigit().fixedSize()
+    }
+
+    @ViewBuilder private var metrics: some View {
+        if let namespace = row.namespace, let usage = workspace.podMetrics[PodKey(namespace: namespace, name: row.name)] {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 14) { readings(usage) }.fixedSize()
+                VStack(alignment: .leading, spacing: 5) { readings(usage) }
+            }
+            .help("Latest pod usage from the cluster’s Metrics API")
+        } else if workspace.podMetricsLoading {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                caption("Loading metrics…")
+            }
+        } else {
+            let reason = workspace.podMetricsError ?? "No usage sample for this pod."
+            Label(workspace.podMetricsError == nil ? "No metrics sample" : "Metrics unavailable",
+                  systemImage: "gauge.with.dots.needle.0percent")
+                .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                .help(reason).accessibilityHint(reason)
         }
-        if let pod = row.pod {
-            metadata("Pod labels", count: pod.labels.count, expanded: $labelsExpanded) {
-                ForEach(pod.labels.keys.sorted(), id: \.self) { key in
-                    Text(verbatim: key + "=" + (pod.labels[key] ?? ""))
-                }
-            }
-            metadata("Annotations", count: pod.annotationKeys.count, expanded: $annotationsExpanded) {
-                ForEach(pod.annotationKeys, id: \.self) { key in Text(verbatim: key) }
-            }
-            if let kind = pod.controllerKind, let name = pod.controllerName {
-                field("Controlled by") {
-                    if workspace.podOwnerKind(row) != nil {
-                        PodLink(value: kind + "/" + name, wraps: true) { workspace.showPodOwner(row) }
-                    } else {
-                        Text(verbatim: kind + "/" + name).textSelection(.enabled)
+    }
+
+    @ViewBuilder private func readings(_ usage: PodUsage) -> some View {
+        HStack(spacing: 5) {
+            caption("CPU")
+            Text(verbatim: usage.cpuText).monospacedDigit()
+        }
+        HStack(spacing: 5) {
+            caption("Memory")
+            Text(verbatim: usage.memoryText).monospacedDigit()
+        }
+    }
+
+    private func caption(_ title: String) -> some View {
+        Text(title).font(.system(size: 11)).foregroundStyle(Palette.muted)
+    }
+
+    private func properties(_ pod: PodDetails) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Properties").font(.system(size: 14, weight: .semibold)).accessibilityAddTraits(.isHeader)
+            Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 6) {
+                if let date = row.createdAt {
+                    field("Created") {
+                        ViewThatFits(in: .horizontal) {
+                            ResourceAgeText(createdAt: date, includeDate: true).fixedSize()
+                            Text(verbatim: date.formatted(date: .abbreviated, time: .shortened))
+                                .textSelection(.enabled)
+                        }
+                        .help(date.formatted(date: .complete, time: .complete))
                     }
                 }
-            }
-            field("Status") {
-                VStack(alignment: .leading, spacing: 4) {
-                    PodStatus(pod: pod)
-                    if let warning = pod.warning {
-                        Label(warning, systemImage: "exclamationmark.triangle")
-                            .font(.system(size: 11)).foregroundStyle(.orange)
+                if let kind = pod.controllerKind, let name = pod.controllerName {
+                    field("Controlled by") {
+                        if workspace.podOwnerKind(row) != nil {
+                            PodLink(value: kind + "/" + name, wraps: true) { workspace.showPodOwner(row) }
+                        } else {
+                            Text(verbatim: kind + "/" + name).textSelection(.enabled)
+                        }
                     }
                 }
-            }
-            if let node = pod.node {
-                field("Node") { PodLink(value: node, wraps: true) { workspace.showPodNode(row) } }
-            }
-            if !pod.podIPs.isEmpty {
-                field(pod.podIPs.count == 1 ? "Pod IP" : "Pod IPs") {
-                    Text(verbatim: pod.podIPs.joined(separator: "\n")).textSelection(.enabled)
+                if let node = pod.node {
+                    field("Node") { PodLink(value: node, wraps: true) { workspace.showPodNode(row) } }
                 }
+                if !pod.podIPs.isEmpty {
+                    field(pod.podIPs.count == 1 ? "Pod IP" : "Pod IPs") {
+                        Text(verbatim: pod.podIPs.joined(separator: "\n")).monospacedDigit().textSelection(.enabled)
+                    }
+                }
+                if let account = pod.serviceAccount {
+                    field("Service account") { Text(verbatim: account).textSelection(.enabled) }
+                }
+                if let qos = pod.qos { field("QoS") { Text(verbatim: qos) } }
             }
-            if let account = pod.serviceAccount {
-                field("Service account") { Text(verbatim: account).textSelection(.enabled) }
-            }
-            if let qos = pod.qos { field("QoS") { Text(verbatim: qos) } }
-            field("Ready") { Text("\(pod.readyCount)/\(pod.readinessContainerCount)") }
-            field("Restarts") { Text(String(pod.restartCount)) }
         }
     }
 
     private func field<Value: View>(_ title: String, @ViewBuilder value: () -> Value) -> some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(title).foregroundStyle(Palette.muted).frame(width: 90, alignment: .leading)
-                value().frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.vertical, 7).fixedSize(horizontal: false, vertical: true)
-            Divider()
+        GridRow {
+            Text(title).foregroundStyle(Palette.muted).fixedSize()
+            value().frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private func metadata<Content: View>(_ title: String, count: Int, expanded: Binding<Bool>,
-                                         @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            field(title) {
-                if count == 0 {
-                    Text("0").foregroundStyle(Palette.muted)
-                } else {
-                    Button { expanded.wrappedValue.toggle() } label: {
-                        HStack(spacing: 6) {
-                            Text(String(count)).monospacedDigit()
-                            Image(systemName: expanded.wrappedValue ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 9, weight: .medium))
-                        }.contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain).foregroundStyle(Palette.forest)
-                    .accessibilityLabel((expanded.wrappedValue ? "Hide " : "Show ") + title.lowercased())
-                    .accessibilityValue(String(count))
+    private func metadata(_ pod: PodDetails) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Metadata").font(.system(size: 14, weight: .semibold)).accessibilityAddTraits(.isHeader)
+            metadataGroup("Pod labels", count: pod.labels.count, expanded: $labelsExpanded) {
+                ForEach(pod.labels.keys.sorted(), id: \.self) { key in
+                    Text(verbatim: key + "=" + (pod.labels[key] ?? ""))
                 }
             }
-            if expanded.wrappedValue, count > 0 {
-                VStack(alignment: .leading, spacing: 6) { content() }
-                    .font(.system(size: 10.5, design: .monospaced)).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(9)
-                    .background(Palette.surface)
+            metadataGroup("Annotations", count: pod.annotationKeys.count, expanded: $annotationsExpanded) {
+                ForEach(pod.annotationKeys, id: \.self) { key in Text(verbatim: key) }
             }
         }
+    }
+
+    private func metadataGroup<Content: View>(_ title: String, count: Int, expanded: Binding<Bool>,
+                                               @ViewBuilder content: @escaping () -> Content) -> some View {
+        DisclosureGroup(isExpanded: expanded) {
+            VStack(alignment: .leading, spacing: 5) { content() }
+                .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(count.formatted()).monospacedDigit().foregroundStyle(Palette.muted)
+            }
+        }
+        .disabled(count == 0)
+    }
+}
+
+private struct PodDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                configuration.isExpanded.toggle()
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 10)
+                        .accessibilityHidden(true)
+                    configuration.label
+                }
+                .padding(.horizontal, 6)
+                .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+                .modifier(PodDisclosureFeedback())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            if configuration.isExpanded {
+                configuration.content.padding(.leading, 6)
+            }
+        }
+    }
+}
+
+private struct PodDisclosureFeedback: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovered = false
+    @State private var handPushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(hovered && isEnabled ? Palette.rowHover : .clear, in: RoundedRectangle(cornerRadius: 4))
+            .contentShape(Rectangle())
+            .onHover { inside in
+                hovered = inside
+                showHand(inside && isEnabled)
+            }
+            .onChange(of: isEnabled) { _, enabled in showHand(hovered && enabled) }
+            .onDisappear {
+                hovered = false
+                showHand(false)
+            }
+    }
+
+    private func showHand(_ show: Bool) {
+        guard handPushed != show else { return }
+        handPushed = show
+        if show { NSCursor.pointingHand.push() } else { NSCursor.pop() }
     }
 }
 
@@ -542,37 +662,59 @@ private struct PodInspectedContainers: View {
         self.context = context
         self.row = row
         self.containers = containers
-        _expanded = State(initialValue: Set(containers.prefix(1).map(\.name)))
+        let initial = containers.first { $0.state == .waiting || ($0.exitCode ?? 0) != 0 } ?? containers.first
+        _expanded = State(initialValue: initial.map { [$0.name] } ?? [])
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Containers").font(.system(size: 15, weight: .semibold)).accessibilityAddTraits(.isHeader)
+            Text("Containers").font(.system(size: 14, weight: .semibold)).accessibilityAddTraits(.isHeader)
             ForEach(containers, id: \.name) { container in
-                DisclosureGroup(isExpanded: Binding(get: { expanded.contains(container.name) }, set: { show in
-                    if show { expanded.insert(container.name) } else { expanded.remove(container.name) }
-                })) {
-                    details(for: container)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
-                } label: {
-                    HStack(spacing: 6) {
-                        Circle().fill(container.color).frame(width: 7, height: 7)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(verbatim: container.name).fontWeight(.medium)
-                            Text(verbatim: container.roleText + " · " + container.stateText)
+                let isExpanded = expanded.contains(container.name)
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        if isExpanded { expanded.remove(container.name) } else { expanded.insert(container.name) }
+                    } label: {
+                        HStack(spacing: 9) {
+                            Image(systemName: "shippingbox")
+                                .font(.system(size: 14)).foregroundStyle(Palette.muted)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(verbatim: container.name).font(.system(size: 12, weight: .semibold))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                HStack(spacing: 4) {
+                                    Circle().fill(container.color).frame(width: 6, height: 6)
+                                    Text(verbatim: container.roleText + " · " + container.stateText)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                                 .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                            }
+                            Spacer(minLength: 0)
+                            Label(container.restartCount.formatted(), systemImage: "arrow.clockwise")
+                                .font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.muted)
+                                .fixedSize().help("Container restarts")
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.muted)
+                                .frame(width: 10)
                         }
-                        Spacer(minLength: 2)
-                        Text(container.restartCount.formatted() + (container.restartCount == 1 ? " restart" : " restarts"))
-                            .font(.system(size: 10.5)).foregroundStyle(Palette.muted)
+                        .multilineTextAlignment(.leading)
+                        .padding(.horizontal, 11).padding(.vertical, 9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .modifier(PodDisclosureFeedback())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain).background(Palette.raised)
+                    .accessibilityLabel(container.summary)
+                    .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                    if isExpanded {
+                        Divider()
+                        details(for: container)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(11)
+                    }
                 }
-                Divider()
+                .background(Palette.surface, in: RoundedRectangle(cornerRadius: 7))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Palette.line).allowsHitTesting(false))
             }
         }
-        .padding(14)
         .modifier(ResourceDetailRead(version: row.resourceVersion, attempt: attempt, load: {
             try await KubernetesClient().inspectPod(for: row, in: context.file, context: context.name)
         }, receive: { response in
@@ -603,40 +745,87 @@ private struct PodInspectedContainers: View {
 
 private struct ContainerProperties: View {
     let info: PodContainerInspection
-    @State private var showEnvironment = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            ForEach(Array(info.properties.enumerated()), id: \.offset) { _, field in
-                labeledValue(field.name, field.value)
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(fields(in: .image), id: \.name) { field in
+                VStack(alignment: .leading, spacing: 3) {
+                    fieldLabel(field.name)
+                    fieldValue(field.value, label: field.name, monospaced: true)
+                }
             }
+            fieldRows(fields(in: .runtime))
+            fieldDisclosure("Image details & IDs", section: .imageDetails)
+            fieldDisclosure("Configuration", section: .configuration)
             if !info.environment.isEmpty || !info.environmentFrom.isEmpty {
-                DisclosureGroup("Environment", isExpanded: $showEnvironment) {
-                    VStack(alignment: .leading, spacing: 9) {
+                DisclosureGroup("Environment") {
+                    VStack(alignment: .leading, spacing: 8) {
                         ForEach(Array(info.environmentFrom.enumerated()), id: \.offset) { _, source in
-                            labeledValue("Import all keys", source)
+                            environmentValue("Import all keys", source)
                         }
                         ForEach(Array(info.environment.enumerated()), id: \.offset) { _, variable in
-                            labeledValue(variable.name, variable.value)
+                            environmentValue(variable.name, variable.value)
                         }
                     }
-                    .padding(.top, 5).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 6).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
     }
 
-    @ViewBuilder private func labeledValue(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(verbatim: label).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.muted)
-            if value.isEmpty {
-                Text("Empty value").foregroundStyle(Palette.muted)
-            } else if value.utf8.count > 2048 || value.prefix(2048).filter({ $0 == "\n" }).count > 8 {
-                ScrollableConfigValue(value: value, key: label).frame(height: 120)
-            } else {
-                Text(verbatim: value).font(.system(size: 11.5, design: .monospaced))
-                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+    private func fields(in section: PodContainerInspection.Section) -> [PodContainerInspection.Field] {
+        info.properties.filter { $0.section == section }
+    }
+
+    @ViewBuilder private func fieldDisclosure(_ title: String, section: PodContainerInspection.Section) -> some View {
+        let fields = fields(in: section)
+        if !fields.isEmpty {
+            DisclosureGroup(title) {
+                fieldRows(fields).padding(.top, 6)
             }
+        }
+    }
+
+    @ViewBuilder private func fieldRows(_ fields: [PodContainerInspection.Field]) -> some View {
+        if !fields.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(fields, id: \.name) { field in
+                    let value = fieldValue(field.value, label: field.name, monospaced: field.section != .runtime)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 8) {
+                            fieldLabel(field.name).frame(width: 92, alignment: .leading)
+                            value.frame(minWidth: 118, idealWidth: 118, maxWidth: .infinity, alignment: .leading)
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            fieldLabel(field.name)
+                            value
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func environmentValue(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            fieldLabel(label).textSelection(.enabled)
+            fieldValue(value, label: label, monospaced: true)
+        }
+    }
+
+    private func fieldLabel(_ title: String) -> some View {
+        Text(verbatim: title).font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.muted)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private func fieldValue(_ value: String, label: String, monospaced: Bool) -> some View {
+        if value.isEmpty {
+            Text("Empty value").foregroundStyle(Palette.muted)
+        } else if value.utf8.count > 2048 || value.prefix(2048).filter({ $0 == "\n" }).count > 8 {
+            ScrollableConfigValue(value: value, key: label).frame(height: 120)
+        } else {
+            Text(verbatim: value).font(.system(size: 11.5, design: monospaced ? .monospaced : .default))
+                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

@@ -1,9 +1,14 @@
 import Foundation
 
 public struct PodContainerInspection: Sendable {
+    public enum Section: Equatable, Sendable {
+        case image, imageDetails, runtime, configuration, environment
+    }
+
     public struct Field: Equatable, Sendable {
         public let name: String
         public let value: String
+        public let section: Section
     }
 
     public let properties: [Field]
@@ -12,25 +17,27 @@ public struct PodContainerInspection: Sendable {
 
     fileprivate init(spec: ContainerSpec?, status: ContainerStatus?) {
         var fields = [Field]()
-        func add(_ name: String, _ value: String?) {
+        func add(_ section: Section, _ name: String, _ value: String?) {
             guard let value, !value.isEmpty else { return }
-            fields.append(Field(name: name, value: value))
+            fields.append(Field(name: name, value: value, section: section))
         }
         if let image = spec?.image, !image.isEmpty {
-            add("Image", image)
+            add(.image, "Image", image)
             let version = Self.imageVersion(image)
-            add("Image tag", version.tag)
-            add("Image digest", version.digest)
+            add(.imageDetails, "Image tag", version.tag)
+            add(.imageDetails, "Image digest", version.digest)
         }
-        if status?.image != spec?.image { add("Runtime image", status?.image) }
-        add("Image ID", status?.imageID)
-        add("Container ID", status?.containerID)
-        add("Image pull policy", spec?.imagePullPolicy)
-        add("Command", spec?.command?.joined(separator: "\n"))
-        add("Arguments", spec?.args?.joined(separator: "\n"))
-        add("Working directory", spec?.workingDir)
+        if status?.image != spec?.image {
+            add(spec?.image?.isEmpty == false ? .imageDetails : .image, "Runtime image", status?.image)
+        }
+        add(.imageDetails, "Image ID", status?.imageID)
+        add(.imageDetails, "Container ID", status?.containerID)
+        add(.imageDetails, "Image pull policy", spec?.imagePullPolicy)
+        add(.configuration, "Command", spec?.command?.joined(separator: "\n"))
+        add(.configuration, "Arguments", spec?.args?.joined(separator: "\n"))
+        add(.configuration, "Working directory", spec?.workingDir)
         if let ports = spec?.ports {
-            add("Ports", ports.map { port in
+            add(.configuration, "Ports", ports.map { port in
                 let name = port.name.map { $0 + " " } ?? ""
                 return name + String(port.containerPort) + "/" + (port.protocol ?? "TCP")
             }.joined(separator: "\n"))
@@ -38,24 +45,24 @@ public struct PodContainerInspection: Sendable {
         func quantities(_ values: [String: String]?) -> String? {
             values?.sorted { $0.key < $1.key }.map { $0.key + " " + $0.value }.joined(separator: "\n")
         }
-        add("Requests", quantities(spec?.resources?.requests))
-        add("Limits", quantities(spec?.resources?.limits))
-        add("Started", status?.state?.running?.startedAt)
-        add("Waiting reason", status?.state?.waiting?.reason)
-        add("Waiting message", status?.state?.waiting?.message)
+        add(.configuration, "Requests", quantities(spec?.resources?.requests))
+        add(.configuration, "Limits", quantities(spec?.resources?.limits))
+        add(.runtime, "Started", status?.state?.running?.startedAt)
+        add(.runtime, "Waiting reason", status?.state?.waiting?.reason)
+        add(.runtime, "Waiting message", status?.state?.waiting?.message)
         func addTermination(_ name: String, _ state: ContainerStatus.Termination?) {
             guard let state else { return }
             var summary = [state.reason, state.exitCode.map { "exit " + String($0) },
                            state.signal.flatMap { $0 == 0 ? nil : "signal " + String($0) }].compactMap { $0 }
             if let finished = state.finishedAt { summary.append(finished) }
-            add(name, summary.joined(separator: " · "))
-            add(name + " message", state.message)
+            add(.runtime, name, summary.joined(separator: " · "))
+            add(.runtime, name + " message", state.message)
         }
         addTermination("Termination", status?.state?.terminated)
         addTermination("Last termination", status?.lastState?.terminated)
         properties = fields
         environment = (spec?.env ?? []).map { field in
-            Field(name: field.name, value: field.valueFrom?.description ?? (field.value ?? ""))
+            Field(name: field.name, value: field.valueFrom?.description ?? (field.value ?? ""), section: .environment)
         }
         environmentFrom = (spec?.envFrom ?? []).map(\.description)
     }

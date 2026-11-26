@@ -118,6 +118,14 @@ private struct LogText: NSViewRepresentable {
     let text: String
     let findRequest: Int
 
+    private static let logAttributes: [NSAttributedString.Key: Any] = {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 2
+        return [.foregroundColor: NSColor(Palette.ink),
+                .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                .paragraphStyle: paragraph]
+    }()
+
     final class Coordinator {
         var handledFindRequest: Int
         init(_ request: Int) { handledFindRequest = request }
@@ -138,9 +146,7 @@ private struct LogText: NSViewRepresentable {
             view.usesFindBar = true
             view.isIncrementalSearchingEnabled = true
             view.drawsBackground = false
-            view.textColor = NSColor(Palette.ink)
-            view.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
-            view.textContainerInset = NSSize(width: 10, height: 8)
+            view.textContainerInset = NSSize(width: 12, height: 10)
             view.isHorizontallyResizable = true
             view.textContainer?.widthTracksTextView = false
             view.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
@@ -151,26 +157,28 @@ private struct LogText: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let view = scroll.documentView as? NSTextView else { return }
-        if view.string != text {
+        guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage else { return }
+        let oldText = view.string
+        if oldText != text {
             let viewport = scroll.documentVisibleRect
             let selection = view.selectedRange()
-            let followTail = view.string.isEmpty || (selection.length == 0 && viewport.maxY >= view.bounds.maxY - 2)
-            let previousLength = (view.string as NSString).length
+            let followTail = oldText.isEmpty || (selection.length == 0 && viewport.maxY >= view.bounds.maxY - 2)
             let newText = text as NSString
-            if text.utf8.starts(with: view.string.utf8), let storage = view.textStorage {
-                storage.replaceCharacters(in: NSRange(location: previousLength, length: 0),
-                                          with: newText.substring(from: previousLength))
+            // Plain string edits to NSTextStorage can drop the console's font and foreground color.
+            if text.utf8.starts(with: oldText.utf8) {
+                let suffix = newText.substring(from: storage.length)
+                storage.append(NSAttributedString(string: suffix, attributes: Self.logAttributes))
             } else {
-                view.string = text
+                storage.setAttributedString(NSAttributedString(string: text, attributes: Self.logAttributes))
                 if NSMaxRange(selection) <= newText.length { view.setSelectedRange(selection) }
             }
+            var offset = viewport.origin
             if followTail {
-                view.scrollRangeToVisible(NSRange(location: newText.length, length: 0))
-            } else {
-                scroll.contentView.scroll(to: viewport.origin)
-                scroll.reflectScrolledClipView(scroll.contentView)
+                if let container = view.textContainer { view.layoutManager?.ensureLayout(for: container) }
+                offset.y = max(0, view.bounds.maxY - viewport.height)
             }
+            scroll.contentView.scroll(to: offset)
+            scroll.reflectScrolledClipView(scroll.contentView)
         }
         if context.coordinator.handledFindRequest != findRequest {
             context.coordinator.handledFindRequest = findRequest
