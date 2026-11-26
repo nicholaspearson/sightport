@@ -1,6 +1,6 @@
 # Sightport updates
 
-Sightport checks for signed updates daily with Sparkle. Use **Sightport → Check for Updates…** for an immediate check. **Sightport → Automatic Updates** controls scheduled checks and automatic download and installation. Sparkle can apply a downloaded update when Sightport quits. [Sparkle update preferences](https://sparkle-project.org/documentation/customization/)
+With **Check Automatically** enabled, Sightport checks for signed updates at launch and about once an hour while running. The update window appears in Sightport when a release is available, or when you return to the app. With **Download and Install Automatically** enabled, the window appears after the download is ready. You can install then or let Sparkle finish on quit. Use **Sightport → Check for Updates…** to check immediately, and **Sightport → Automatic Updates** to change either preference. [Sparkle update preferences](https://sparkle-project.org/documentation/customization/)
 
 ## Configure the release
 

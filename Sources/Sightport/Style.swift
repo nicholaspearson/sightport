@@ -20,6 +20,48 @@ enum Palette {
     static let selection = Color(rgb: 0x2F443A)
 }
 
+struct WorkbenchProgressStyle: ProgressViewStyle {
+    @Environment(\.controlSize) private var controlSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        if configuration.fractionCompleted == nil {
+            VStack(spacing: 4) {
+                TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { frame in
+                    let turn = reduceMotion ? 0 : frame.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1)
+                    let stroke = StrokeStyle(lineWidth: max(1.5, diameter / 8), lineCap: .round)
+                    Circle()
+                        .strokeBorder(Palette.muted.opacity(0.32), lineWidth: stroke.lineWidth)
+                        .overlay {
+                            Circle().inset(by: stroke.lineWidth / 2)
+                                .trim(from: 0, to: 0.68)
+                                .stroke(Palette.forest, style: stroke)
+                                .rotationEffect(.degrees(turn * 360 - 90))
+                        }
+                }
+                .frame(width: diameter, height: diameter)
+                configuration.label
+                configuration.currentValueLabel
+            }
+            .foregroundStyle(Palette.ink)
+            .accessibilityRepresentation { ProgressView(configuration).progressViewStyle(.circular) }
+        } else {
+            ProgressView(configuration).progressViewStyle(.automatic)
+        }
+    }
+
+    private var diameter: CGFloat {
+        switch controlSize {
+        case .mini: 10
+        case .small: 16
+        case .regular: 20
+        case .large: 32
+        case .extraLarge: 40
+        @unknown default: 20
+        }
+    }
+}
+
 struct IconAction: View {
     let symbol: String
     let title: String

@@ -260,6 +260,16 @@ private final class ResourceNSTableView: NSTableView {
     var rowMenu: ((Int) -> NSMenu?)?
     var activate: ((Int) -> Void)?
     var rowClicked: (() -> Void)?
+
+    override func drawGrid(inClipRect clipRect: NSRect) {
+        // AppKit normally continues the grid below the last data row.
+        guard numberOfRows > 0 else { return }
+        let lastRow = rect(ofRow: numberOfRows - 1)
+        let rows = NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: lastRow.maxY - bounds.minY)
+        let visibleGrid = clipRect.intersection(rows)
+        if !visibleGrid.isEmpty { super.drawGrid(inClipRect: visibleGrid) }
+    }
+
     override func mouseDown(with event: NSEvent) {
         if row(at: convert(event.locationInWindow, from: nil)) >= 0 { rowClicked?() }
         super.mouseDown(with: event)

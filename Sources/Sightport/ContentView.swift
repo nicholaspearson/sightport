@@ -27,6 +27,7 @@ struct ContentView: View {
         .foregroundStyle(Palette.ink)
         .background(Palette.canvas)
         .tint(Palette.forest)
+        .progressViewStyle(WorkbenchProgressStyle())
         .onAppear { workspace.setWindowVisible(true) }
         .onDisappear { workspace.setWindowVisible(false) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in

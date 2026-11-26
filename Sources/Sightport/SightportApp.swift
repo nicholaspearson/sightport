@@ -51,32 +51,73 @@ struct SightportApp: App {
 }
 
 @MainActor
-private final class ClientUpdates: ObservableObject {
-    let controller: SPUStandardUpdaterController?
+private final class ClientUpdates: NSObject, ObservableObject, SPUUpdaterDelegate, @preconcurrency SPUStandardUserDriverDelegate {
+    private(set) var controller: SPUStandardUpdaterController?
+    private var preparedUpdateNeedsPrompt = false
     @Published private(set) var canCheck = true
     @Published private(set) var checksAutomatically = false
     @Published private(set) var downloadsAutomatically = false
 
-    init() {
+    override init() {
+        super.init()
         let info = Bundle.main
         guard let feed = info.object(forInfoDictionaryKey: "SUFeedURL") as? String,
               let url = URL(string: feed), url.scheme?.lowercased() == "https", url.host?.isEmpty == false,
               let key = info.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
               Data(base64Encoded: key)?.count == 32 else {
-            controller = nil
             return
         }
-        let controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
+        let controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: self, userDriverDelegate: self)
         self.controller = controller
         let updater = controller.updater
         updater.publisher(for: \.canCheckForUpdates).assign(to: &$canCheck)
         updater.publisher(for: \.automaticallyChecksForUpdates).assign(to: &$checksAutomatically)
         updater.publisher(for: \.automaticallyDownloadsUpdates).assign(to: &$downloadsAutomatically)
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive(_:)),
+                                               name: NSApplication.didBecomeActiveNotification, object: NSApp)
         controller.startUpdater()
+        if updater.automaticallyChecksForUpdates && updater.canCheckForUpdates {
+            updater.checkForUpdatesInBackground()
+        }
+    }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
+        preparedUpdateNeedsPrompt = false
+        if !immediateFocus && NSApp.isActive {
+            // Sparkle has created the alert but normally waits for the next app activation.
+            DispatchQueue.main.async { [weak self] in
+                if NSApp.isActive { self?.controller?.userDriver.showUpdateInFocus() }
+            }
+        }
+        return true
+    }
+
+    func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
+                 immediateInstallationBlock: @escaping () -> Void) -> Bool {
+        preparedUpdateNeedsPrompt = true
+        return false // Sparkle still owns installation on quit.
+    }
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        if error != nil { preparedUpdateNeedsPrompt = false }
+        presentPreparedUpdateIfActive()
+    }
+
+    @objc private func applicationDidBecomeActive(_ notification: Notification) {
+        presentPreparedUpdateIfActive()
+    }
+
+    private func presentPreparedUpdateIfActive() {
+        guard preparedUpdateNeedsPrompt, let updater = controller?.updater, NSApp.isActive,
+              updater.automaticallyChecksForUpdates, updater.canCheckForUpdates, !updater.sessionInProgress else { return }
+        preparedUpdateNeedsPrompt = false
+        // The download session must finish before Sparkle can offer the prepared update.
+        updater.checkForUpdates()
     }
 
     func check() {
         if let controller {
+            preparedUpdateNeedsPrompt = false
             controller.checkForUpdates(nil)
         } else {
             let alert = NSAlert()
