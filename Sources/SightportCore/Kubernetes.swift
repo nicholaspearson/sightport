@@ -216,7 +216,7 @@ public struct KubernetesClient: Sendable {
         return executable
     }
 
-    func run(_ arguments: [String], file: URL, operation: ClusterOperation) async throws -> Data {
+    func run(_ arguments: [String], file: URL, operation: ClusterOperation, commandTimeout: TimeInterval? = nil) async throws -> Data {
         let executable = try executable(for: file, helm: operation.usesHelm)
         // Helm's global connection overrides must not silently redirect the selected context.
         let commandEnvironment = operation.usesHelm
@@ -224,7 +224,7 @@ public struct KubernetesClient: Sendable {
             : sdkEnvironment
         return try await onClusterReader {
             try runClusterCommand(executable: executable, arguments: ["--kubeconfig=\(file.path)"] + arguments,
-                                  environment: commandEnvironment, operation: operation, timeout: timeout)
+                                  environment: commandEnvironment, operation: operation, timeout: commandTimeout ?? timeout)
         }
     }
 
@@ -268,7 +268,10 @@ private struct ContextList: Decodable {
 }
 
 enum ClusterOperation {
+    case workloadAction
+    case inspection(NodeOperation?)
     case discovery, connection, resources(ResourceKind, String?), podMetrics, podLogs, podInspection
+    case deploymentLogPods
     case secretDetails, configMapDetails, podTermination
     case customResources(String, String?), helmReleases
 
@@ -279,10 +282,13 @@ enum ClusterOperation {
 }
 
 enum KubernetesError: LocalizedError {
+    case inspection(InspectionFailure)
+    case workloadAction(WorkloadFailure)
     case missingSDK, missingHelm, unreadableFile, launch, invalidContexts, missingContext
     case helmLaunch, helmUnavailable, helmDenied, customResourceDenied(String), customResourceUnavailable(String)
     case resourceDenied(ResourceKind, String?), unsupported(ResourceKind), namespaceMissing(String)
     case secretDenied, secretMissing, secretUnavailable
+    case deploymentLogTargetMissing, deploymentLogPodsUnavailable, deploymentLogPodsDenied
     case podInspectionUnavailable, podInspectionDenied
     case podIdentityMissing, podTerminationDenied, podTerminationMissing, podTerminationConflict, podTerminationUnconfirmed
     case configMapDenied, configMapMissing, configMapUnavailable
@@ -291,6 +297,11 @@ enum KubernetesError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .workloadAction(let failure): return failure.description
+        case .deploymentLogTargetMissing: return "The selected Deployment is no longer available."
+        case .deploymentLogPodsUnavailable: return "Could not load the pods for this Deployment."
+        case .deploymentLogPodsDenied: return "Viewing Deployment logs requires permission to get the Deployment and list its ReplicaSets and pods."
+        case .inspection(let issue): return issue.description
         case .podInspectionUnavailable: return "Could not read this pod’s container details."
         case .podInspectionDenied: return "This context does not have permission to get this pod."
         case .podIdentityMissing: return "Select a pod with a namespace, name, and UID."
@@ -349,6 +360,35 @@ enum KubernetesError: LocalizedError {
         if case .discovery = operation { return .invalidContexts }
         // Credential helpers control stderr. Use it only for classification, never for display or storage.
         let message = String(decoding: stderr, as: UTF8.self).lowercased()
+        if case .workloadAction = operation {
+            let diagnostic = String(message.split(whereSeparator: \.isNewline).last ?? "")
+            switch diagnostic {
+            case "unauthorized": return .authentication
+            case "context not found": return .missingContext
+            case "forbidden": return .workloadAction(.forbidden)
+            case "not found", "namespaces not found": return .workloadAction(.missing)
+            case "x509", "certificate": return .certificate
+            case "getting credentials", "exec plugin": return .credentialHelper
+            default: return .workloadAction(WorkloadFailure(rawValue: diagnostic) ?? .unconfirmed)
+            }
+        }
+        if case .inspection(let action) = operation {
+            let diagnostic = String(message.split(whereSeparator: \.isNewline).last ?? "")
+            if let issue = InspectionFailure(rawValue: diagnostic) { return .inspection(issue) }
+            switch diagnostic {
+            case "context not found": return .missingContext
+            case "unauthorized": return .authentication
+            case "x509", "certificate": return .certificate
+            case "getting credentials", "exec plugin": return .credentialHelper
+            case "forbidden": return .inspection(action == nil ? .readDenied : .mutationDenied)
+            default:
+                switch action {
+                case .drain: return .inspection(.drainIncomplete)
+                case .delete: return .inspection(.deleteUnconfirmed)
+                case nil: return .inspection(.readUnavailable)
+                }
+            }
+        }
         if case .podTermination = operation {
             // The final helper diagnostic describes this DELETE. Credential plugins
             // can write unrelated messages to the same stderr stream.
@@ -384,6 +424,7 @@ enum KubernetesError: LocalizedError {
             switch operation {
             case .podMetrics: return .metricsDenied
             case .podLogs: return .logsDenied
+            case .deploymentLogPods: return .deploymentLogPodsDenied
             case .podInspection: return .podInspectionDenied
             case .helmReleases: return .helmDenied
             case .secretDetails: return .secretDenied
@@ -406,6 +447,9 @@ enum KubernetesError: LocalizedError {
         if case .podMetrics = operation { return .metricsUnavailable }
         if case .podInspection = operation {
             return message.contains("not found") ? .logTargetMissing : .podInspectionUnavailable
+        }
+        if case .deploymentLogPods = operation {
+            return message.contains("not found") ? .deploymentLogTargetMissing : .deploymentLogPodsUnavailable
         }
         if case .podLogs = operation {
             if message.contains("previous terminated container") { return .previousUnavailable }

@@ -136,7 +136,8 @@ public enum ResourceKind: String, CaseIterable, Hashable, Sendable {
         case .daemonSets:
             return [.number("Ready", ".status.numberReady"), .number("Desired", ".status.desiredNumberScheduled"),
                     .number("Current", ".status.currentNumberScheduled")]
-        case .jobs: return [.number("Active", ".status.active"), .number("Succeeded", ".status.succeeded"), .number("Failed", ".status.failed")]
+        case .jobs: return [.number("Active", ".status.active"), .number("Succeeded", ".status.succeeded"),
+                            .number("Failed", ".status.failed"), .value("Suspended", ".spec.suspend", fallback: "false")]
         case .cronJobs: return [.value("Schedule", ".spec.schedule"), .value("Suspended", ".spec.suspend", fallback: "false"),
                                 .value("Last scheduled", ".status.lastScheduleTime")]
         case .configMaps: return [.count("Text keys", ".data"), .count("Binary keys", ".binaryData")]
@@ -191,7 +192,7 @@ public enum ResourceKind: String, CaseIterable, Hashable, Sendable {
     // tabs, percent signs, and plus signs in a Lease or CronJob from changing the row layout.
     var listTemplate: String { "{{range .items}}" + rowTemplate + #"{{"\n"}}{{end}}"# }
 
-    var includesResourceVersion: Bool { self == .configMaps || self == .secrets }
+    var includesResourceVersion: Bool { self == .configMaps || self == .secrets || self == .nodes || self == .serviceAccounts }
 
     var rowTemplate: String {
         let metadata = [".metadata.uid", ".metadata.name", ".metadata.namespace", ".metadata.creationTimestamp"]

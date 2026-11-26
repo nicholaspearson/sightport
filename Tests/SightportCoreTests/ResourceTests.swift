@@ -78,6 +78,24 @@ final class ResourceTests: XCTestCase {
         XCTAssertThrowsError(try PodUsage.decodeTable(Data("worker  1m  9223372036854775807Mi".utf8), namespace: "blue"))
     }
 
+    func testDeploymentLogPodDiscoveryScopesRequestsAndReportsDeniedAccess() async throws {
+        let row = ResourceRow(id: "selected-uid", name: "api", namespace: "blue", createdAt: nil, values: [])
+        let output = directory.appendingPathComponent("output")
+        try #"[{"id":"pod-uid","name":"api-1","containers":[{"name":"worker","restartCount":2}]}]"#
+            .write(to: output, atomically: true, encoding: .utf8)
+        let pods = try await client.deploymentLogPods(in: config, context: "east", deployment: row)
+        XCTAssertEqual(pods.map(\.id), ["pod-uid"])
+        XCTAssertEqual(pods.first?.containers.first?.restartCount, 2)
+        let arguments = try String(contentsOf: argumentFile, encoding: .utf8).split(separator: "\n").map(String.init)
+        XCTAssertEqual(arguments, ["--kubeconfig=\(config.path)", "--context=east", "--request-timeout=12s",
+                                   "--namespace=blue", "--uid=selected-uid", "deployment-log-pods", "api"])
+        try "Forbidden".write(to: directory.appendingPathComponent("error"), atomically: true, encoding: .utf8)
+        do {
+            _ = try await client.deploymentLogPods(in: config, context: "east", deployment: row)
+            XCTFail("Expected access denial")
+        } catch KubernetesError.deploymentLogPodsDenied {}
+    }
+
     func testPodLogsTargetOneContainerWithBoundedCurrentOrPreviousOutput() async throws {
         let output = directory.appendingPathComponent("output")
         let log = "starting\nready\n"

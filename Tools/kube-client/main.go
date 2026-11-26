@@ -126,7 +126,7 @@ func run(ctx context.Context, argv []string, in io.Reader, out io.Writer) error 
 		return contextMetadata(o.file, out)
 	}
 
-	if o.watch || args[0] == "exec" || args[0] == "port-forward" {
+	if o.watch || args[0] == "drain-node" || args[0] == "exec" || args[0] == "port-forward" {
 		if pid, err := strconv.Atoi(os.Getenv("SIGHTPORT_PARENT_PID")); err == nil && pid > 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithCancel(ctx)
@@ -151,11 +151,19 @@ func run(ctx context.Context, argv []string, in io.Reader, out io.Writer) error 
 		if len(args) == 2 {
 			return get(ctx, cfg, o, args[1], out)
 		}
+	case "restart-workload", "start-job", "resume-job":
+		return workloadCommand(ctx, cfg, o, args, out)
+	case "drain-node", "delete-node", "inspect-resource":
+		return inspectOrManage(ctx, cfg, o, args, out)
 	case "terminate-pod":
 		if len(args) != 2 || o.allNamespaces {
 			return podDeleteInvalid
 		}
 		return terminatePod(ctx, cfg, o.namespace, args[1], o.uid)
+	case "deployment-log-pods":
+		if len(args) == 2 && !o.allNamespaces {
+			return deploymentLogPods(ctx, cfg, o.namespace, args[1], o.uid, out)
+		}
 	case "metrics":
 		if len(args) == 1 {
 			return podMetrics(ctx, cfg, o.namespace, out)
@@ -179,6 +187,14 @@ func run(ctx context.Context, argv []string, in io.Reader, out io.Writer) error 
 // Emit error categories only. The server, templates and credential plugins may
 // include object contents or credential fields in their error text.
 func diagnostic(err error) string {
+	var workload workloadError
+	if errors.As(err, &workload) {
+		return string(workload)
+	}
+	var inspection inspectionDiagnostic
+	if errors.As(err, &inspection) {
+		return string(inspection)
+	}
 	var deletion podDeleteError
 	if errors.As(err, &deletion) {
 		return string(deletion)

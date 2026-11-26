@@ -42,6 +42,11 @@ struct ContentView: View {
                              primaryButton: .cancel(), secondaryButton: .destructive(Text("Remove")) {
                                  Task { @MainActor in workspace.confirmContextRemoval(id) }
                              })
+            case .workload(let request):
+                return Alert(title: Text(request.action.title + "?"), message: Text(verbatim: item.message),
+                             primaryButton: .cancel(), secondaryButton: .default(Text(request.action.title)) {
+                                 workspace.confirmWorkloadAction(request)
+                             })
             case .terminatePod(let request):
                 return Alert(title: Text("Terminate Pod?"), message: Text(verbatim: item.message),
                              primaryButton: .cancel(), secondaryButton: .destructive(Text("Terminate Pod")) {
@@ -93,8 +98,27 @@ struct ContentView: View {
     private var center: some View {
         VStack(spacing: 0) {
             tabBar
+            if let notice = workspace.workloadNotice, case .cluster = workspace.page {
+                HStack(spacing: 8) {
+                    Image(systemName: notice.failed ? "exclamationmark.triangle" : "checkmark.circle")
+                        .foregroundStyle(notice.failed ? Color.orange : Palette.forest)
+                    Text(verbatim: notice.message).textSelection(.enabled)
+                    Spacer()
+                    IconAction(symbol: "xmark", title: "Dismiss message") { workspace.workloadNotice = nil }
+                }
+                .font(.system(size: 12)).padding(.horizontal, 12).padding(.vertical, 4)
+                .background(Palette.surface)
+                hairline
+            }
             if workspace.page == .cluster(.resources(.pods)) {
-                podWorkspace.id(workspace.connectedContext)
+                workspaceWithDrawer { width in
+                    resourceSplit(.pods, width: width) { row in
+                        PodInspector(workspace: workspace, row: row) { workspace.select(nil) }
+                    }
+                }
+                .id(workspace.connectedContext)
+            } else if workspace.page == .cluster(.resources(.deployments)) {
+                workspaceWithDrawer { _ in standardWorkspace }.id(workspace.connectedContext)
             } else if let kind = workspace.page.configDataKind, let context = workspace.connectedContext {
                 GeometryReader { area in
                     resourceSplit(kind, width: area.size.width) { row in
@@ -144,16 +168,15 @@ struct ContentView: View {
         }
     }
 
-    private var podWorkspace: some View {
+    private func workspaceWithDrawer<Content: View>(@ViewBuilder content: @escaping (CGFloat) -> Content) -> some View {
         GeometryReader { geometry in
             let logsMinimum = min(220, max(148, geometry.size.height * 0.26))
             VSplitView {
-                resourceSplit(.pods, width: geometry.size.width) { row in
-                    PodInspector(workspace: workspace, row: row) { workspace.select(nil) }
-                }
-                .frame(minHeight: 160, maxHeight: .infinity)
-                .layoutPriority(1)
-                if workspace.activeDrawerTab != nil {
+                content(geometry.size.width)
+                    .frame(minHeight: 160, maxHeight: .infinity)
+                    .layoutPriority(1)
+                if workspace.activeDrawerTab != nil &&
+                    (workspace.page == .cluster(.resources(.pods)) || workspace.podLogTarget?.kind == .deployments) {
                     let collapsed = workspace.podDrawerCollapsed
                     PodDrawer(workspace: workspace)
                         .frame(minHeight: collapsed ? 32 : logsMinimum,
@@ -276,12 +299,13 @@ private struct WorkspaceTab: View {
                     Image(systemName: tab.symbol)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(selected ? Palette.forest : Palette.muted)
-                    Text(tab.title).lineLimit(1).truncationMode(.middle)
+                    Text(tab.title).italic(workspace.previewTab == tab).lineLimit(1).truncationMode(.middle)
                         .font(.system(size: 12, weight: selected ? .semibold : .regular))
                 }.padding(.leading, 13).padding(.trailing, 3)
                     .frame(maxHeight: .infinity).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture(count: 2).onEnded { workspace.keepTabOpen(tab) })
             .help(tabHelp)
             .accessibilityLabel(tab.title + " tab").accessibilityAddTraits(selected ? .isSelected : [])
             if workspace.tabs.count > 1 {
@@ -301,12 +325,16 @@ private struct WorkspaceTab: View {
             if selected { Rectangle().fill(Palette.forest).frame(height: 2) }
         }
         .overlay(alignment: .trailing) { Rectangle().fill(Palette.line).frame(width: 1) }
+        .contextMenu {
+            if workspace.previewTab == tab { Button("Keep Tab Open") { workspace.keepTabOpen(tab) } }
+            Button("Close Tab") { workspace.close(tab) }.disabled(workspace.tabs.count < 2)
+        }
         .onHover { hovered = $0 }
     }
 
     private var tabHelp: String {
         if case .cluster(.customResources(let type)) = tab { return type.resourceName + " · " + type.version }
-        return tab.title
+        return workspace.previewTab == tab ? tab.title + " · Preview. Double-click to keep open." : tab.title
     }
 }
 

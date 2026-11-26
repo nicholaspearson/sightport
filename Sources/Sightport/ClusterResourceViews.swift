@@ -1,13 +1,26 @@
 import SightportCore
 import SwiftUI
 
+// Keep the work that pinned a tab available when the user comes back to it.
+final class ResourceTableSettings: ObservableObject {
+    @Published var query = ""
+    @Published var sort: [KeyPathComparator<ResourceRow>]
+    @Published var podSort = [KeyPathComparator(\PodTableItem.age), KeyPathComparator(\PodTableItem.name)]
+
+    init(section: ClusterSection) {
+        var order = [KeyPathComparator(\ResourceRow.name), KeyPathComparator(\ResourceRow.namespace)]
+        if section == .resources(.events), let index = section.columns.firstIndex(of: "Last seen") {
+            order.insert(KeyPathComparator(\ResourceRow.[field: index], order: .reverse), at: 0)
+        }
+        sort = order
+    }
+}
+
 struct ClusterResourceTable: View {
     @ObservedObject var workspace: Workspace
     let section: ClusterSection
-    @State private var query = ""
+    @ObservedObject private var settings: ResourceTableSettings
     @State private var checkedPods: Set<String> = []
-    @State private var sort: [KeyPathComparator<ResourceRow>]
-    @State private var podSort = [KeyPathComparator(\PodTableItem.age), KeyPathComparator(\PodTableItem.name)]
     @State private var presentation: ResourceTablePresentation?
     @State private var updates: AsyncStream<Void>.Continuation?
     @FocusState private var searchFocused: Bool
@@ -15,11 +28,7 @@ struct ClusterResourceTable: View {
     init(workspace: Workspace, section: ClusterSection) {
         self.workspace = workspace
         self.section = section
-        var order = [KeyPathComparator(\ResourceRow.name), KeyPathComparator(\ResourceRow.namespace)]
-        if section == .resources(.events), let index = section.columns.firstIndex(of: "Last seen") {
-            order.insert(KeyPathComparator(\ResourceRow.[field: index], order: .reverse), at: 0)
-        }
-        _sort = State(initialValue: order)
+        settings = workspace.tableSettings(for: section)
     }
 
     private var kind: ResourceKind? { section.listKind }
@@ -32,7 +41,7 @@ struct ClusterResourceTable: View {
         let options = ResourceTableOptions(
             section: section, context: workspace.connectedContext,
             namespace: section.isNamespaced ? workspace.namespaceFilter : nil,
-            query: query.trimmingCharacters(in: .whitespacesAndNewlines), sort: sort, podSort: podSort
+            query: settings.query.trimmingCharacters(in: .whitespacesAndNewlines), sort: settings.sort, podSort: settings.podSort
         )
         let revision = TableDataRevision(rows: workspace.rowsRevision, metrics: kind == .pods ? workspace.podMetricsRevision : 0)
         let current = presentation.flatMap {
@@ -41,6 +50,12 @@ struct ClusterResourceTable: View {
         GeometryReader { area in
             resourceList(compact: (kind == .pods || workspace.page.configDataKind != nil) && area.size.width < 425,
                          data: current, filter: options.query)
+        }
+        .onChange(of: checkedPods) { _, ids in
+            if !ids.isEmpty { workspace.keepTabOpen(.cluster(section)) }
+        }
+        .onChange(of: settings.query) { _, value in
+            if !value.isEmpty { workspace.keepTabOpen(.cluster(section)) }
         }
         .onChange(of: revision) { updates?.yield() }
         .task(id: options) {
@@ -132,7 +147,7 @@ struct ClusterResourceTable: View {
                         }
                     } else if kind == .pods {
                         PodsTable(workspace: workspace, items: data?.pods ?? [], dataID: data?.id, scrollID: AnyHashable(data?.options),
-                                  checked: $checkedPods, sort: $podSort)
+                                  checked: $checkedPods, sort: $settings.podSort)
                     } else {
                         resourceTable(data: data)
                     }
@@ -189,10 +204,10 @@ struct ClusterResourceTable: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted)
             let title = "Search " + (section == .overview ? "workload types" : listTitle.lowercased())
-            TextField(title, text: $query)
+            TextField(title, text: $settings.query)
                 .textFieldStyle(.plain).focused($searchFocused).accessibilityLabel(title)
-            if !query.isEmpty {
-                Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+            if !settings.query.isEmpty {
+                Button { settings.query = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).accessibilityLabel("Clear search")
             }
         }
@@ -221,12 +236,20 @@ struct ClusterResourceTable: View {
         })
         return LiveResourceTable(items: data?.rows ?? [], dataID: AnyHashable(data?.id),
                                  scrollID: AnyHashable(data?.options), columns: resourceColumns,
-                                 selection: selection, sortOrder: $sort, menu: { row in
+                                 selection: selection, sortOrder: $settings.sort, onInteraction: { workspace.keepTabOpen(page) }, menu: { row in
             let menu = NSMenu()
             if kind == .namespaces {
                 menu.addAction("View pods in " + row.name) { showPods(in: row.name) }
             } else if kind == .customResourceDefinitions, let type = CustomResourceType(definition: row) {
                 menu.addAction("View instances") { workspace.openCluster(.customResources(type)) }
+            }
+            if kind == .deployments {
+                menu.addAction("View Logs…") { workspace.openDeploymentLogs(row) }
+            }
+            if let kind, let action = WorkloadAction(kind: kind, row: row) {
+                menu.addAction(action.title + "…", enabled: !workspace.isChangingWorkload(row, kind: kind)) {
+                    workspace.requestWorkloadAction(kind, row: row)
+                }
             }
             return menu.items.isEmpty ? nil : menu
         }, doubleClick: { row in
@@ -277,7 +300,10 @@ struct ClusterResourceTable: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(kinds, id: \.self) { kind in
-                        Button { workspace.openCluster(.resources(kind)) } label: {
+                        Button {
+                            workspace.keepTabOpen()
+                            workspace.openCluster(.resources(kind))
+                        } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: "shippingbox").foregroundStyle(Palette.forest)
                                 Text(kind.title).fontWeight(.medium)
@@ -310,7 +336,7 @@ struct ClusterResourceTable: View {
                 .foregroundStyle(Palette.muted)
             Text(filtered ? "No matches" : "No " + noun + " found").font(.system(size: 13, weight: .medium))
             if filtered {
-                Button("Clear search") { query = "" }.buttonStyle(.link)
+                Button("Clear search") { settings.query = "" }.buttonStyle(.link)
             }
         }
     }
@@ -417,21 +443,8 @@ struct ResourceCell: View {
 struct ResourceAgeSchedule: TimelineSchedule {
     let createdAt: Date
 
-    static func unit(for seconds: Int) -> (duration: Int, suffix: String) {
-        switch seconds {
-        case ..<60: return (1, "s")
-        case ..<3600: return (60, "m")
-        case ..<86_400: return (3600, "h")
-        default: return (86_400, "d")
-        }
-    }
-
     func entries(from startDate: Date, mode: TimelineScheduleMode) -> some Sequence<Date> {
-        sequence(first: startDate) { date in
-            let elapsed = Int(max(0, date.timeIntervalSince(createdAt)))
-            let step = Self.unit(for: elapsed).duration
-            return createdAt.addingTimeInterval(TimeInterval((elapsed / step + 1) * step))
-        }
+        sequence(first: startDate) { ResourceAge(createdAt: createdAt, now: $0).nextChange }
     }
 }
 
@@ -453,9 +466,7 @@ struct ResourceAgeText: View {
 
     private var relativeTime: some View {
         TimelineView(ResourceAgeSchedule(createdAt: createdAt)) { tick in
-            let elapsed = Int(max(0, tick.date.timeIntervalSince(createdAt)))
-            let unit = ResourceAgeSchedule.unit(for: elapsed)
-            let age = String(elapsed / unit.duration) + unit.suffix
+            let age = ResourceAge(createdAt: createdAt, now: tick.date).text
             Text(verbatim: includeDate ? age + " ago ·" : age)
         }
     }
@@ -557,6 +568,16 @@ struct ClusterResourceInspector: View {
                     Text(verbatim: row.name).font(.system(size: 14, weight: .semibold))
                         .lineLimit(1).truncationMode(.middle).help(row.name).textSelection(.enabled)
                     Spacer()
+                    if kind == .nodes, let context = workspace.connectedContext {
+                        NodeActionsView(context: context, row: row).id(row.id).id(context)
+                    }
+                    if kind == .deployments {
+                        Button("View Logs") { workspace.openDeploymentLogs(row) }.controlSize(.small)
+                    }
+                    if let kind, let action = WorkloadAction(kind: kind, row: row) {
+                        Button(action.title + "…") { workspace.requestWorkloadAction(kind, row: row) }
+                            .controlSize(.small).disabled(workspace.isChangingWorkload(row, kind: kind))
+                    }
                     if kind == .namespaces {
                         Button("View pods") {
                             workspace.setNamespace(row.name)
@@ -584,7 +605,15 @@ struct ClusterResourceInspector: View {
                     }
                     if let createdAt = row.createdAt { field("Created", createdAt.formatted(date: .abbreviated, time: .standard)) }
                 }
+                if let context = workspace.connectedContext {
+                    if kind == .nodes {
+                        NodeInspectionView(context: context, row: row).id(row.id).id(context)
+                    } else if kind == .serviceAccounts {
+                        ServiceAccountAnnotationsView(context: context, row: row).id(row.id).id(context)
+                    }
+                }
             }
+            .simultaneousGesture(TapGesture().onEnded { workspace.keepTabOpen(.cluster(section)) })
             .padding(.horizontal, 16).padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }

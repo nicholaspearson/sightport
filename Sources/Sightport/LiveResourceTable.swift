@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SightportCore
 
 enum LiveCell {
     case text(String, color: NSColor = .labelColor, bold: Bool = false, help: String? = nil)
@@ -30,6 +31,7 @@ struct LiveResourceTable<Item: Identifiable & Equatable>: NSViewRepresentable wh
     let columns: [LiveColumn<Item>]
     @Binding var selection: String?
     @Binding var sortOrder: [KeyPathComparator<Item>]
+    var onInteraction: () -> Void = {}
     let menu: (Item) -> NSMenu?
     let doubleClick: (Item) -> Void
 
@@ -57,6 +59,7 @@ struct LiveResourceTable<Item: Identifiable & Equatable>: NSViewRepresentable wh
         table.target = table
         table.doubleAction = #selector(ResourceNSTableView.activateRow)
         table.rowMenu = { [weak coordinator = context.coordinator] row in coordinator?.menu(at: row) }
+        table.rowClicked = { [weak coordinator = context.coordinator] in coordinator?.model.onInteraction() }
         table.activate = { [weak coordinator = context.coordinator] row in coordinator?.activate(row) }
         scroll.documentView = table
         context.coordinator.table = table
@@ -70,7 +73,7 @@ struct LiveResourceTable<Item: Identifiable & Equatable>: NSViewRepresentable wh
     }
 
     @MainActor final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
-        private var model: LiveResourceTable
+        fileprivate var model: LiveResourceTable
         fileprivate weak var table: ResourceNSTableView?
         fileprivate var ageTimer: Timer?
         private var dataID: AnyHashable?
@@ -220,7 +223,10 @@ struct LiveResourceTable<Item: Identifiable & Equatable>: NSViewRepresentable wh
         func tableViewSelectionDidChange(_ notification: Notification) {
             guard !updating, let row = table?.selectedRow else { return }
             let id = model.items.indices.contains(row) ? model.items[row].id : nil
-            if model.selection != id { model.selection = id }
+            if model.selection != id {
+                if id != nil { model.onInteraction() }
+                model.selection = id
+            }
         }
 
         func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
@@ -230,12 +236,17 @@ struct LiveResourceTable<Item: Identifiable & Equatable>: NSViewRepresentable wh
                 comparator?.order = descriptor.ascending ? .forward : .reverse
                 return comparator
             }
-            if model.sortOrder != sort { model.sortOrder = sort }
+            if model.sortOrder != sort {
+                model.onInteraction()
+                model.sortOrder = sort
+            }
         }
 
         fileprivate func menu(at row: Int) -> NSMenu? {
             guard model.items.indices.contains(row) else { return nil }
-            return model.menu(model.items[row])
+            let menu = model.menu(model.items[row])
+            if menu != nil { model.onInteraction() }
+            return menu
         }
 
         fileprivate func activate(_ row: Int) {
@@ -248,6 +259,11 @@ struct LiveResourceTable<Item: Identifiable & Equatable>: NSViewRepresentable wh
 private final class ResourceNSTableView: NSTableView {
     var rowMenu: ((Int) -> NSMenu?)?
     var activate: ((Int) -> Void)?
+    var rowClicked: (() -> Void)?
+    override func mouseDown(with event: NSEvent) {
+        if row(at: convert(event.locationInWindow, from: nil)) >= 0 { rowClicked?() }
+        super.mouseDown(with: event)
+    }
     @objc func activateRow() { activate?(clickedRow) }
     override func menu(for event: NSEvent) -> NSMenu? {
         rowMenu?(row(at: convert(event.locationInWindow, from: nil)))
@@ -377,11 +393,9 @@ private final class ResourceTableCell: NSTableCellView {
 
     func updateAge(at now: Date) -> Date? {
         guard let date = createdAt, let label = content as? NSTextField else { return nil }
-        let seconds = max(0, Int(now.timeIntervalSince(date)))
-        let unit = ResourceAgeSchedule.unit(for: seconds)
-        let age = String(seconds / unit.duration) + unit.suffix
-        if label.stringValue != age { label.stringValue = age }
-        return date.addingTimeInterval(TimeInterval((seconds / unit.duration + 1) * unit.duration))
+        let age = ResourceAge(createdAt: date, now: now)
+        if label.stringValue != age.text { label.stringValue = age.text }
+        return age.nextChange
     }
 
     override func layout() {

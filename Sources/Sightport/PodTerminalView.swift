@@ -130,9 +130,11 @@ struct PodDrawer: View {
                             drawerTab(.logs, title: "Logs", symbol: "text.alignleft", namespace: target.namespace,
                                       pod: target.name, close: workspace.closePodLogs)
                         }
-                        ForEach(workspace.podTerminals) { tab in
-                            drawerTab(.terminal(tab.id), title: "Terminal", symbol: "terminal", namespace: tab.namespace,
-                                      pod: tab.pod) { workspace.closePodTerminal(tab) }
+                        if workspace.page == .cluster(.resources(.pods)) {
+                            ForEach(workspace.podTerminals) { tab in
+                                drawerTab(.terminal(tab.id), title: "Terminal", symbol: "terminal", namespace: tab.namespace,
+                                          pod: tab.pod) { workspace.closePodTerminal(tab) }
+                            }
                         }
                     }
                 }

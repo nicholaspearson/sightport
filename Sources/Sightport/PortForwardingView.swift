@@ -43,6 +43,7 @@ final class PortForwardManager: ObservableObject {
 }
 
 struct PortForwardingView: View {
+    @EnvironmentObject private var workspace: Workspace
     @ObservedObject var manager: PortForwardManager
     let context: ContextID
     let namespace: String?
@@ -56,7 +57,10 @@ struct PortForwardingView: View {
                 Text(entries.count == 1 ? "1 port forward" : "\(entries.count) port forwards")
                     .foregroundStyle(Palette.muted)
                 Spacer()
-                Button { adding = true } label: { Label("New Forward…", systemImage: "plus") }
+                Button {
+                    workspace.keepTabOpen()
+                    adding = true
+                } label: { Label("New Forward…", systemImage: "plus") }
                     .controlSize(.small)
             }
             .padding(.horizontal, 12).frame(height: 38).background(Palette.surface)

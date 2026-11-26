@@ -108,6 +108,7 @@ struct PodsTable: View {
         let appearance = CellAppearance(checked: checked, metricsMessage: metricsMessage)
         return LiveResourceTable(items: items, dataID: AnyHashable(dataID), visualID: AnyHashable(appearance),
                                  scrollID: scrollID, columns: columns, selection: selection, sortOrder: $sort,
+                                 onInteraction: { workspace.keepTabOpen(.cluster(.resources(.pods))) },
                                  menu: { actions(for: $0.row) }, doubleClick: { workspace.inspectPod($0.row) })
     }
 
@@ -117,6 +118,7 @@ struct PodsTable: View {
         return [
             Column(id: "checked", title: "", width: 30, minWidth: 30) { item in
                 .check(checked.contains(item.id), help: "Check " + item.name) {
+                    workspace.keepTabOpen()
                     if checked.remove(item.id) == nil { checked.insert(item.id) }
                 }
             },
@@ -302,6 +304,9 @@ struct PodInspector: View {
                     .foregroundStyle(Palette.ink)
             }
             Spacer(minLength: 2)
+            if let context = workspace.connectedContext {
+                ResourceManifestButton(context: context, kind: .pod, row: row).id(context)
+            }
             IconAction(symbol: "text.alignleft", title: "View logs") { workspace.openPodLogs(row) }
                 .disabled(row.namespace == nil || row.pod?.containers.isEmpty != false)
             IconAction(symbol: "terminal", title: "Open terminal") { workspace.openPodTerminal(row) }

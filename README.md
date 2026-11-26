@@ -13,6 +13,12 @@ Download the Sightport ZIP for Intel and Apple silicon Macs, unzip it, and move 
 
 After a successful connection, Sightport opens **Namespaces**. Double-click a namespace to view its pods. The connected navigator also includes **Nodes**, **Workloads**, and **Config**. Select a resource to inspect its fields, or open **Workloads → Overview** for counts by kind.
 
+Browsing resources reuses one italicized preview tab. Selecting a row, searching, sorting, or opening logs keeps the tab open. Double-click the tab or choose **Keep Tab Open** from its context menu to keep it explicitly.
+
+Select a **Node** to inspect scheduling, conditions, addresses, capacity and labels. The inspector header offers its YAML manifest, **Drain node…** and **Delete node…**. Draining cordons the node and requests pod evictions subject to disruption budgets. Check the node’s scheduling state after a drain.
+
+In **Deployments**, choose **View Logs** and use the **Pod** and **Container** selectors in the bottom drawer. **Restart Rollout…** is available on Deployments, DaemonSets and StatefulSets. Under **Cron Jobs**, **Start Job…** creates a one-off run. Under **Jobs**, **Start Job…** resumes a suspended Job and **Run Again…** creates a new Job from the selected run.
+
 In **Config → Config Maps**, select a Config Map to read its keys and values beside the list. Expand **Labels** or **Annotations** to inspect its metadata. Text values preserve their formatting, and binary values are shown as Base64.
 
 In **Config → Secrets**, select a Secret to open its properties, related events, and data keys beside the list. Values start hidden. Use the eye beside a key to reveal its value or hide it again. Binary values are available as Base64. Listing Secrets and reading an individual Secret use the permissions of the connected context.
@@ -25,14 +31,14 @@ The visible Kubernetes resource list follows watch events. Pods appear and disap
 - **Network → Port Forwarding** lets you start and stop local TCP forwards to a pod or service. Choose **New Forward…**, enter a namespace, target and remote port, then start it. A blank local port assigns an available port. The view shows the listening address on `127.0.0.1`. Forwards stay active while you browse other tabs and stop when you change clusters or close the window.
 - **Storage** shows Persistent Volume Claims, Persistent Volumes and Storage Classes. **Events** shows recent activity, including the affected object, reason, message and last observation.
 - **Helm → Releases** shows release status, revision, chart and application version. This view uses a local Helm 3 or 4 executable and the selected kubeconfig context.
-- **Access Control** lists Service Accounts, Cluster Roles, Roles, Cluster Role Bindings and Role Bindings. Inspect a role for its rules or a binding for its role and subjects.
+- **Access Control** lists Service Accounts, Cluster Roles, Roles, Cluster Role Bindings and Role Bindings. Select a Service Account to read its annotations, including an IAM role ARN when configured. Inspect a role for its rules or a binding for its role and subjects.
 - Expand **Custom Resources** to browse the cluster’s installed custom resource types by API group. Select a kind to see its objects. Namespaced types follow the namespace selector. **Definitions** opens the full CRD table, where you can also double-click a definition to view its instances.
 
 Expand **Argo CD** to open its application health and sync dashboard, Applications, Application Sets, or Projects. Choose the namespace that holds your Argo CD resources, often `argocd`. Select an application on the dashboard to inspect it. **Settings → Repositories** and **Settings → Clusters** show registered connections from labeled Secrets in the selected scope. An account needs permission to list those Secrets. The tables display connection identity fields and omit credentials.
 
 Expand **Karpenter** to browse cluster-wide Node Pools, Node Claims, and AWS EC2 Node Classes. Select a claim to inspect its readiness, instance type, capacity type, and zone. Click **Node Pool** or **Node** in the inspector to open the related object. Sightport uses the APIs served by the selected cluster and reports when a resource is unavailable.
 
-In **Pods**, select a row to open its details on the right. Drag the divider to resize the table and details, or close the details pane to use the full width for the table. Expand a container to inspect its image, runtime state, environment variables and their sources. Expand **Labels** in pod properties to see the pod’s label keys and values. When the cluster serves pod metrics, Sightport refreshes CPU and memory measurements every 15 seconds. Click a namespace, supported controller, or node to open the related resource. Click a column header to sort or check rows to copy their namespace-qualified names together.
+In **Pods**, select a row to open its details on the right. Choose **View YAML manifest** in the inspector toolbar to read the full pod object. Drag the divider to resize the table and details, or close the details pane to use the full width for the table. Expand a container to inspect its image, runtime state, environment variables and their sources. Expand **Labels** in pod properties to see the pod’s label keys and values. When the cluster serves pod metrics, Sightport refreshes CPU and memory measurements every 15 seconds. Click a namespace, supported controller, or node to open the related resource. Click a column header to sort or check rows to copy their namespace-qualified names together.
 
 Choose **Terminate Pod…** from the row menu or the trash button in pod details. The confirmation identifies the pod, namespace, context and any controlling workload. Termination uses the pod’s configured grace period and requires permission to delete pods in its namespace. Its controller may create a replacement.
 

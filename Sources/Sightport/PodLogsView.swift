@@ -7,13 +7,17 @@ struct PodLogsView: View {
     let target: PodLogTarget
     let isVisible: Bool
 
-    @State private var container: String
-    @State private var previous = false
+    @State private var deploymentPods: [LogPod]?
+    @State private var discoveryError: String?
+    @State private var selectedPodID: String?
+    @State private var selectedContainer = ""
+    @State private var previousPodID: String?
     @State private var refreshNumber = 0
     @State private var findRequest = 0
     @State private var result: LogResult?
 
     private struct Request: Equatable {
+        let podID: String
         let container: String
         let previous: Bool
         let refreshNumber: Int
@@ -25,72 +29,68 @@ struct PodLogsView: View {
         let lines: Result<String, Error>
     }
 
-    init(workspace: Workspace, target: PodLogTarget, isVisible: Bool) {
-        self.workspace = workspace
-        self.target = target
-        self.isVisible = isVisible
-        let first = target.containers.first { $0.role == .app } ?? target.containers.first
-        _container = State(initialValue: first?.name ?? "")
+    private var selectedPod: LogPod? {
+        if target.kind == .pods { return LogPod(row: target.row) }
+        return deploymentPods?.first(where: { $0.id == selectedPodID }) ?? deploymentPods?.first
     }
 
     var body: some View {
-        let restartCount = previous ? workspace.resourceRow(id: target.podID)?.pod?
-            .containers.first(where: { $0.name == container })?.restartCount : nil
-        let request = Request(container: container, previous: previous, refreshNumber: refreshNumber, restartCount: restartCount)
+        let pod = selectedPod
+        let request = pod.flatMap { logRequest(for: $0) }
         let active = isVisible && workspace.windowVisible
         VStack(spacing: 0) {
             if isVisible {
                 HStack(spacing: 10) {
-                    Picker("Container", selection: $container) {
-                        ForEach(target.containers, id: \.name) { item in
-                            Text(item.name).tag(item.name)
+                    if target.kind == .deployments {
+                        Picker("Pod", selection: Binding(get: { pod?.id ?? "" }, set: {
+                            selectedPodID = $0
+                            previousPodID = nil
+                        })) {
+                            if deploymentPods?.isEmpty != false { Text("Unavailable").tag("") }
+                            ForEach(deploymentPods ?? []) { Text(verbatim: $0.name).tag($0.id) }
+                        }
+                        .accessibilityLabel("Deployment pod")
+                        .disabled(deploymentPods?.isEmpty != false)
+                        .frame(maxWidth: 310)
+                    }
+                    Picker("Container", selection: Binding(get: { request?.container ?? "" }, set: { selectedContainer = $0 })) {
+                        if pod?.containers.isEmpty != false { Text("Unavailable").tag("") }
+                        ForEach(pod?.containers ?? [], id: \.name) { item in
+                            Text(verbatim: item.name).tag(item.name)
                         }
                     }
                     .accessibilityLabel("Log container")
-                    .controlSize(.small).frame(maxWidth: 265)
-                    Toggle("Previous instance", isOn: $previous).toggleStyle(.checkbox)
-                        .controlSize(.small).fixedSize()
+                    .disabled(request == nil).frame(maxWidth: 265)
+                    Toggle("Previous instance", isOn: Binding(get: { request?.previous == true }, set: {
+                        previousPodID = $0 ? pod?.id : nil
+                    })).toggleStyle(.checkbox).fixedSize().disabled(request == nil)
                         .help("Read the last terminated instance of this container")
                     Spacer(minLength: 0)
-                    if result?.request == request, case .success(let text) = result?.lines, !text.isEmpty {
+                    if let request, result?.request == request, case .success(let text) = result?.lines, !text.isEmpty {
                         IconAction(symbol: "magnifyingglass", title: "Find in logs") { findRequest += 1 }
                     }
                     IconAction(symbol: "arrow.clockwise", title: "Refresh logs") { refreshNumber += 1 }
                 }
+                .controlSize(.small)
                 .padding(.leading, 12).padding(.trailing, 6).frame(height: 34)
                 Divider()
-                Group {
-                    if let result, result.request == request {
-                        switch result.lines {
-                        case .success(let text) where text.isEmpty:
-                            message("No log output for this container instance.", symbol: "text.alignleft")
-                        case .success(let text):
-                            LogText(text: text, findRequest: findRequest)
-                        case .failure(let error):
-                            message(error.localizedDescription, symbol: "exclamationmark.circle")
-                        }
-                    } else {
-                        ProgressView("Loading logs…").controlSize(.small)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
-                .background(Palette.sidebar)
+                output(for: request)
+                    .background(Palette.sidebar)
             }
         }
         .font(.system(size: 12))
         .foregroundStyle(Palette.ink)
         .background(Palette.canvas)
-        .onChange(of: target.containers.map(\.name)) { _, names in
-            guard !names.contains(container) else { return }
-            container = target.containers.first { $0.role == .app }?.name ?? names.first ?? ""
-            previous = false
+        .task(id: active && target.kind == .deployments ? refreshNumber : nil) {
+            guard active, target.kind == .deployments else { return }
+            await observeDeploymentPods()
         }
         .task(id: active ? request : nil) {
-            guard active else { return }
+            guard active, let pod, let request else { return }
             while !Task.isCancelled {
                 let lines: Result<String, Error>
                 do {
-                    lines = .success(try await workspace.loadPodLogs(for: target, container: request.container,
+                    lines = .success(try await workspace.loadPodLogs(for: target, pod: pod, container: request.container,
                                                                      previous: request.previous))
                 } catch { lines = .failure(error) }
                 guard !Task.isCancelled, workspace.podLogTarget?.id == target.id else { return }
@@ -103,6 +103,57 @@ struct PodLogsView: View {
                 }
                 do { try await Task.sleep(for: delay) } catch { return }
             }
+        }
+    }
+
+    private func logRequest(for pod: LogPod) -> Request? {
+        guard let container = pod.containers.first(where: { $0.name == selectedContainer }) ?? pod.containers.first else { return nil }
+        let previous = pod.id == previousPodID
+        return Request(podID: pod.id, container: container.name, previous: previous,
+                       refreshNumber: refreshNumber, restartCount: previous ? container.restartCount : nil)
+    }
+
+    @ViewBuilder
+    private func output(for request: Request?) -> some View {
+        if let discoveryError {
+            message(discoveryError, symbol: "exclamationmark.circle")
+        } else if target.kind == .deployments && deploymentPods?.isEmpty == true {
+            message("This Deployment has no pods.", symbol: "shippingbox")
+        } else if selectedPod?.containers.isEmpty == true {
+            message("This pod has no containers.", symbol: "shippingbox")
+        } else if let request, let result, result.request == request {
+            switch result.lines {
+            case .success(let text) where text.isEmpty:
+                message("No log output for this container instance.", symbol: "text.alignleft")
+            case .success(let text):
+                LogText(text: text, findRequest: findRequest)
+            case .failure(let error):
+                message(error.localizedDescription, symbol: "exclamationmark.circle")
+            }
+        } else {
+            ProgressView(target.kind == .deployments && deploymentPods == nil ? "Loading deployment pods…" : "Loading logs…")
+                .controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func observeDeploymentPods() async {
+        while !Task.isCancelled {
+            do {
+                let pods = try await workspace.loadDeploymentLogPods(for: target)
+                guard !Task.isCancelled, workspace.podLogTarget?.id == target.id else { return }
+                if selectedPodID == nil || !pods.contains(where: { $0.id == selectedPodID }) {
+                    selectedPodID = pods.first?.id
+                    previousPodID = nil
+                }
+                if deploymentPods != pods { deploymentPods = pods }
+                if discoveryError != nil { discoveryError = nil }
+            } catch {
+                guard !Task.isCancelled, workspace.podLogTarget?.id == target.id else { return }
+                deploymentPods = nil
+                result = nil
+                discoveryError = error.localizedDescription
+            }
+            do { try await Task.sleep(for: .seconds(10)) } catch { return }
         }
     }
 
