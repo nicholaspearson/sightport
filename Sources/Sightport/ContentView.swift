@@ -173,9 +173,17 @@ struct ContentView: View {
 
     private func resourceSplit<Details: View>(_ kind: ResourceKind, width: CGFloat, showsDetails: Bool = true,
                                               @ViewBuilder details: (ResourceRow) -> Details) -> some View {
-        let tableMinimum = min(300, max(218, width - 274))
+        let compactInspector: CGFloat = kind == .pods ? 320 : 273
+        let tableMinimum = min(300, max(218, width - compactInspector - 1))
         let detailsMinimum = min(272, max(220, width - tableMinimum - 1))
-        let detailsWidth = kind == .nodes ? min(520, width * 0.41) : width * 0.41
+        let detailsWidth: CGFloat
+        switch kind {
+        case .pods:
+            let preferred = min(480, max(360, width * 0.44))
+            detailsWidth = min(preferred, width - tableMinimum - 1)
+        case .nodes: detailsWidth = min(520, width * 0.41)
+        default: detailsWidth = width * 0.41
+        }
         return HSplitView {
             ClusterResourceTable(workspace: workspace, section: .resources(kind))
                 .frame(minWidth: tableMinimum, idealWidth: width - detailsWidth, maxWidth: .infinity, maxHeight: .infinity)
@@ -186,7 +194,7 @@ struct ContentView: View {
                 .frame(minWidth: detailsMinimum, idealWidth: max(detailsMinimum, detailsWidth),
                        maxWidth: max(detailsMinimum, width - tableMinimum - 1), maxHeight: .infinity)
                 .background {
-                    if kind == .nodes { InitialInspectorWidth(width: detailsWidth) }
+                    if kind == .nodes || kind == .pods { InitialInspectorWidth(width: detailsWidth) }
                 }
             }
         }

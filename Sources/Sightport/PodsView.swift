@@ -258,6 +258,8 @@ private extension PodContainer {
     }
 }
 
+private typealias VersionedPodInspection = (version: String?, result: Result<PodInspection, Error>)
+
 struct PodInspector: View {
     @ObservedObject var workspace: Workspace
     let row: ResourceRow
@@ -268,6 +270,13 @@ struct PodInspector: View {
     @State private var copySucceeded: Bool?
     @State private var copyAttempt = 0
     @State private var forwarding = false
+    @State private var inspection: VersionedPodInspection?
+
+    private var knownPorts: [PodInspection.TCPPort]? {
+        guard let inspection, inspection.version == row.resourceVersion,
+              case .success(let pod) = inspection.result else { return nil }
+        return pod.forwardablePorts
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -280,7 +289,7 @@ struct PodInspector: View {
                         health(pod)
                         properties(pod)
                         if !pod.containers.isEmpty, let context = workspace.connectedContext {
-                            PodInspectedContainers(context: context, row: row, containers: pod.containers)
+                            PodInspectedContainers(context: context, row: row, containers: pod.containers, inspection: $inspection)
                                 .id(context)
                         }
                         metadata(pod)
@@ -293,9 +302,9 @@ struct PodInspector: View {
         .font(.system(size: 12)).foregroundStyle(Palette.ink)
         .background(Palette.canvas)
         .disclosureGroupStyle(InspectorDisclosureStyle())
-        .sheet(isPresented: $forwarding) {
+        .sheet(isPresented: $forwarding) { [knownPorts] in
             if let context = workspace.connectedContext {
-                PortForwardEditor(manager: workspace.portForwards, context: context, pod: row)
+                PortForwardEditor(manager: workspace.portForwards, context: context, pod: row, knownPorts: knownPorts)
             }
         }
         .task(id: copyAttempt) {
@@ -306,17 +315,21 @@ struct PodInspector: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 2) {
-            if let copySucceeded {
-                Text(copySucceeded ? "Copied" : "Copy failed")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(copySucceeded ? Palette.forest : .orange)
-            } else {
-                Label("Pod", systemImage: "cube")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
+        HStack(spacing: 1) {
+            ViewThatFits(in: .horizontal) {
+                Group {
+                    if let copySucceeded {
+                        Text(copySucceeded ? "Copied" : "Copy failed")
+                            .foregroundStyle(copySucceeded ? Palette.forest : .orange)
+                    } else {
+                        Label("Pod", systemImage: "cube").foregroundStyle(Palette.ink)
+                    }
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .fixedSize().padding(.leading, 8)
+                Color.clear.frame(width: 0, height: 0)
             }
-            Spacer(minLength: 2)
+            Spacer(minLength: 0)
             if let context = workspace.connectedContext {
                 ResourceManifestButton(context: context, kind: .pod, row: row).id(context)
             }
@@ -337,10 +350,10 @@ struct PodInspector: View {
                 workspace.requestPodTermination(row)
             }
             .disabled(!workspace.canTerminatePod(row))
-            Divider().frame(height: 14).padding(.horizontal, 3)
+            Divider().frame(height: 14).padding(.horizontal, 2)
             IconAction(symbol: "xmark", title: "Close pod details", action: onClose)
         }
-        .padding(.leading, 14).padding(.trailing, 6).frame(height: 39)
+        .padding(.leading, 6).padding(.trailing, 3).frame(height: 39)
         .background(Palette.surface)
     }
 
@@ -533,14 +546,15 @@ private struct PodInspectedContainers: View {
     let row: ResourceRow
     let containers: [PodContainer]
 
+    @Binding var inspection: VersionedPodInspection?
     @State private var expanded: Set<String>
-    @State private var result: Result<PodInspection, Error>?
     @State private var attempt = 0
 
-    init(context: ContextID, row: ResourceRow, containers: [PodContainer]) {
+    init(context: ContextID, row: ResourceRow, containers: [PodContainer], inspection: Binding<VersionedPodInspection?>) {
         self.context = context
         self.row = row
         self.containers = containers
+        _inspection = inspection
         let initial = containers.first { $0.state == .waiting || ($0.exitCode ?? 0) != 0 } ?? containers.first
         _expanded = State(initialValue: initial.map { [$0.name] } ?? [])
     }
@@ -597,12 +611,12 @@ private struct PodInspectedContainers: View {
         .modifier(ResourceDetailRead(version: row.resourceVersion, attempt: attempt, load: {
             try await KubernetesClient().inspectPod(for: row, in: context.file, context: context.name)
         }, receive: { response in
-            result = response
+            inspection = (row.resourceVersion, response)
         }))
     }
 
     @ViewBuilder private func details(for container: PodContainer) -> some View {
-        if let result {
+        if let result = inspection?.result {
             switch result {
             case .success(let inspection):
                 if let info = inspection.containers[container.name] {

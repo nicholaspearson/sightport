@@ -1,3 +1,4 @@
+import Accessibility
 import SwiftUI
 import SightportCore
 
@@ -143,8 +144,28 @@ struct PortForwardEditor: View {
     @State private var remote = ""
     @State private var local = ""
     @State private var options: [String] = []
-    @State private var ports: [PodInspection.TCPPort] = []
+    @State private var portLookup: PortLookup = .loading
+    @State private var portAttempt = 0
+    @State private var editedRemote = false
     @State private var error: String?
+
+    private enum PortLookup {
+        case loading, loaded([PodInspection.TCPPort]), failed(String)
+
+        var ports: [PodInspection.TCPPort] {
+            if case .loaded(let ports) = self { return ports }
+            return []
+        }
+
+        var message: String {
+            switch self {
+            case .loading: return "Loading TCP ports…"
+            case .loaded(let ports) where ports.isEmpty: return "No TCP ports declared. Enter a port number."
+            case .loaded(let ports): return ports.count == 1 ? "1 TCP port available" : "\(ports.count) TCP ports available"
+            case .failed: return "Couldn’t load TCP ports."
+            }
+        }
+    }
 
     private struct Lookup: Equatable {
         let kind: PortForwardTargetKind
@@ -158,9 +179,13 @@ struct PortForwardEditor: View {
         _namespace = State(initialValue: namespace)
     }
 
-    init(manager: PortForwardManager, context: ContextID, pod: ResourceRow) {
+    init(manager: PortForwardManager, context: ContextID, pod: ResourceRow, knownPorts: [PodInspection.TCPPort]? = nil) {
         self.init(manager: manager, context: context, namespaces: [], namespace: pod.namespace ?? "")
         self.pod = pod
+        if let knownPorts {
+            _portLookup = State(initialValue: .loaded(knownPorts))
+            _remote = State(initialValue: knownPorts.first.map { String($0.number) } ?? "")
+        }
     }
 
     var body: some View {
@@ -179,20 +204,16 @@ struct PortForwardEditor: View {
                 } else {
                     targetFields
                 }
-                GridRow {
+                GridRow(alignment: .firstTextBaseline) {
                     Text("Remote port")
-                    HStack(spacing: 4) {
-                        TextField("Number or port name", text: $remote)
-                        if !ports.isEmpty {
-                            Menu {
-                                ForEach(ports, id: \.number) { port in
-                                    Button(String(port.number) + (port.name.map { " · " + $0 } ?? "")) {
-                                        remote = String(port.number)
-                                    }
-                                }
-                            } label: { Image(systemName: "chevron.down") }
-                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                            .accessibilityLabel("Choose TCP port").help("Choose a TCP port declared by the pod")
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 4) {
+                            TextField("Number or port name", text: remoteInput)
+                                .accessibilityLabel("Remote port")
+                            if pod != nil { portMenu }
+                        }
+                        if let pod {
+                            portStatus.task(id: portAttempt) { await loadPorts(for: pod) }
                         }
                     }
                 }
@@ -213,15 +234,7 @@ struct PortForwardEditor: View {
         .onChange(of: kind) { _, _ in name = ""; options = [] }
         .onChange(of: namespace) { _, _ in options = [] }
         .task(id: Lookup(kind: kind, namespace: namespace)) {
-            if let pod {
-                do {
-                    let inspection = try await manager.client.inspectPod(for: pod, in: context.file, context: context.name)
-                    guard !Task.isCancelled else { return }
-                    ports = inspection.forwardablePorts
-                    if remote.isEmpty, let first = ports.first { remote = String(first.number) }
-                } catch { /* A port can still be entered manually. */ }
-                return
-            }
+            guard pod == nil else { return }
             let ns = namespace.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !ns.isEmpty else { return }
             do {
@@ -231,6 +244,61 @@ struct PortForwardEditor: View {
                 options = names
             } catch { /* Manual entry also works with permission to forward but no permission to list. */ }
         }
+    }
+
+    private var remoteInput: Binding<String> {
+        Binding(get: { remote }, set: { value in
+            // AppKit writes the current value back when the field gains focus.
+            guard value != remote else { return }
+            editedRemote = true
+            remote = value
+        })
+    }
+
+    private var portMenu: some View {
+        Menu("Choose port") {
+            ForEach(portLookup.ports, id: \.number) { port in
+                Button(String(port.number) + (port.name.map { " · " + $0 } ?? "")) {
+                    remoteInput.wrappedValue = String(port.number)
+                }
+            }
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .disabled(portLookup.ports.isEmpty)
+        .accessibilityLabel("Choose TCP port").help("Choose a TCP port declared by the pod")
+    }
+
+    private var portStatus: some View {
+        HStack(spacing: 5) {
+            if case .loading = portLookup {
+                ProgressView().controlSize(.mini)
+                    .progressViewStyle(WorkbenchProgressStyle()).accessibilityHidden(true)
+            }
+            Text(verbatim: portLookup.message).fixedSize(horizontal: false, vertical: true)
+            if case .failed(let reason) = portLookup {
+                Button("Retry") {
+                    portLookup = .loading
+                    portAttempt += 1
+                }
+                .buttonStyle(.link).help(reason)
+            }
+        }
+        .font(.caption).foregroundStyle(Palette.muted)
+    }
+
+    private func loadPorts(for pod: ResourceRow) async {
+        guard case .loading = portLookup else { return }
+        do {
+            let inspection = try await manager.client.inspectPod(for: pod, in: context.file, context: context.name)
+            guard !Task.isCancelled else { return }
+            let ports = inspection.forwardablePorts
+            portLookup = .loaded(ports)
+            if !editedRemote, let first = ports.first { remote = String(first.number) }
+        } catch {
+            guard !Task.isCancelled else { return }
+            portLookup = .failed(error.localizedDescription)
+        }
+        AccessibilityNotification.Announcement(portLookup.message).post()
     }
 
     @ViewBuilder private var targetFields: some View {

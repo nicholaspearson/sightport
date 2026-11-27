@@ -78,7 +78,28 @@ struct IconAction: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain).foregroundStyle(Palette.muted)
-        .onHover { hovered = $0 }.help(title).accessibilityLabel(title)
+        .onHover { hovered = $0 }
+        .overlay { IconToolTip(title: title).allowsHitTesting(false) }
+        .accessibilityLabel(title)
+    }
+}
+
+private struct IconToolTip: NSViewRepresentable {
+    let title: String
+
+    func makeNSView(context: Context) -> ToolTipView {
+        let view = ToolTipView()
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ view: ToolTipView, context: Context) {
+        // Updating the same tooltip during a resource refresh restarts AppKit’s hover delay.
+        if view.toolTip != title { view.toolTip = title }
+    }
+
+    final class ToolTipView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 
