@@ -315,7 +315,29 @@ struct PodInspector: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 1) {
+        let missingPodDetails: String?
+        if row.namespace?.isEmpty != false {
+            missingPodDetails = "The pod’s namespace is unavailable."
+        } else if row.pod == nil {
+            missingPodDetails = "Pod details are unavailable."
+        } else {
+            missingPodDetails = nil
+        }
+        let logsUnavailable = missingPodDetails ?? (row.pod?.containers.isEmpty == true ? "No containers are listed for this pod." : nil)
+        let terminalUnavailable = missingPodDetails ?? (row.runningContainerNames.isEmpty ? "A container must be running to open a shell." : nil)
+        let forwardUnavailable = missingPodDetails ?? (row.pod?.isTerminating == true ? "The pod is terminating." : nil)
+        let terminating = workspace.isTerminatingPod(row)
+        let canTerminate = workspace.canTerminatePod(row)
+        let terminationDetail: String
+        if terminating {
+            terminationDetail = "A deletion request is already in progress."
+        } else if canTerminate {
+            terminationDetail = "Confirm deletion using the pod’s grace period."
+        } else {
+            terminationDetail = missingPodDetails ?? "A valid pod UID is required for deletion."
+        }
+
+        return HStack(spacing: 1) {
             ViewThatFits(in: .horizontal) {
                 Group {
                     if let copySucceeded {
@@ -333,25 +355,36 @@ struct PodInspector: View {
             if let context = workspace.connectedContext {
                 ResourceManifestButton(context: context, kind: .pod, row: row).id(context)
             }
-            IconAction(symbol: "text.alignleft", title: "View logs") { workspace.openPodLogs(row) }
-                .disabled(row.namespace == nil || row.pod?.containers.isEmpty != false)
-            IconAction(symbol: "terminal", title: "Open terminal") { workspace.openPodTerminal(row) }
-                .disabled(row.runningContainerNames.isEmpty)
-            IconAction(symbol: "arrow.left.arrow.right", title: "Forward port…") { forwarding = true }
-                .disabled(row.namespace == nil || row.pod?.isTerminating != false)
+            IconAction(symbol: "text.alignleft", title: "View logs",
+                       detail: logsUnavailable ?? "Read container output in the bottom panel.") {
+                workspace.openPodLogs(row)
+            }
+            .disabled(logsUnavailable != nil)
+            IconAction(symbol: "terminal", title: "Open terminal",
+                       detail: terminalUnavailable ?? "Open a shell in a running container.") {
+                workspace.openPodTerminal(row)
+            }
+            .disabled(terminalUnavailable != nil)
+            IconAction(symbol: "arrow.left.arrow.right", title: "Forward port…",
+                       detail: forwardUnavailable ?? "Connect a local port to a TCP port on this pod.") {
+                forwarding = true
+            }
+            .disabled(forwardUnavailable != nil)
             IconAction(symbol: copySucceeded.map { $0 ? "checkmark" : "exclamationmark.triangle" } ?? "doc.on.doc",
-                       title: "Copy namespace/name") {
+                       title: "Copy namespace/name", detail: row.qualifiedPodName) {
                 let succeeded = copyPodNames([row])
                 copySucceeded = succeeded
                 copyAttempt += 1
                 AccessibilityNotification.Announcement(succeeded ? "Pod name copied" : "Couldn’t copy the pod name").post()
             }
-            IconAction(symbol: "trash", title: workspace.isTerminatingPod(row) ? "Termination requested" : "Terminate Pod…") {
+            IconAction(symbol: "trash", title: terminating ? "Termination requested" : "Terminate Pod…",
+                       detail: terminationDetail) {
                 workspace.requestPodTermination(row)
             }
-            .disabled(!workspace.canTerminatePod(row))
+            .disabled(!canTerminate)
             Divider().frame(height: 14).padding(.horizontal, 2)
-            IconAction(symbol: "xmark", title: "Close pod details", action: onClose)
+            IconAction(symbol: "xmark", title: "Close pod details",
+                       detail: "Return to the full-width pod list.", action: onClose)
         }
         .padding(.leading, 6).padding(.trailing, 3).frame(height: 39)
         .background(Palette.surface)

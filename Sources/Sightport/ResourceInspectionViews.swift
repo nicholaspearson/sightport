@@ -20,10 +20,13 @@ struct ResourceManifestButton: View {
     @State private var showing = false
 
     var body: some View {
-        IconAction(symbol: "doc.text.magnifyingglass", title: "View YAML manifest") { showing = true }
-            .sheet(isPresented: $showing) {
-                ManifestSheet(context: context, kind: kind, row: row, workbenchSize: workbenchSize)
-            }
+        IconAction(symbol: "doc.text.magnifyingglass", title: "View YAML manifest",
+                   detail: "Inspect metadata, spec, and status from the cluster.") {
+            showing = true
+        }
+        .sheet(isPresented: $showing) {
+            ManifestSheet(context: context, kind: kind, row: row, workbenchSize: workbenchSize)
+        }
     }
 }
 

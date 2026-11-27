@@ -65,6 +65,7 @@ struct WorkbenchProgressStyle: ProgressViewStyle {
 struct IconAction: View {
     let symbol: String
     let title: String
+    var detail: String? = nil
     let action: () -> Void
     @State private var hovered = false
 
@@ -79,27 +80,9 @@ struct IconAction: View {
         }
         .buttonStyle(.plain).foregroundStyle(Palette.muted)
         .onHover { hovered = $0 }
-        .overlay { IconToolTip(title: title).allowsHitTesting(false) }
+        .overlay { IconToolTip(title: title, detail: detail).allowsHitTesting(false) }
         .accessibilityLabel(title)
-    }
-}
-
-private struct IconToolTip: NSViewRepresentable {
-    let title: String
-
-    func makeNSView(context: Context) -> ToolTipView {
-        let view = ToolTipView()
-        view.setAccessibilityElement(false)
-        return view
-    }
-
-    func updateNSView(_ view: ToolTipView, context: Context) {
-        // Updating the same tooltip during a resource refresh restarts AppKit’s hover delay.
-        if view.toolTip != title { view.toolTip = title }
-    }
-
-    final class ToolTipView: NSView {
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        .accessibilityHint(detail ?? "")
     }
 }
 

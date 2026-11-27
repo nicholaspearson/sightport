@@ -31,6 +31,7 @@
 		71B5D843883842C8A7C54BCF /* PodsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA1E6AC020947B78C74D69F /* PodsView.swift */; };
 		A7E000000000000000000005 /* PodTerminalSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E000000000000000000004 /* PodTerminalSurface.swift */; };
 		CC8BD1B6A4659B4EB9EFC518 /* Style.swift in Sources */ = {isa = PBXBuildFile; fileRef = C39999ACA3F18E584E593087 /* Style.swift */; };
+		3F1DCCABBFFC4C878600FE55 /* IconToolTip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98B55BA182F842D8AD250A3E /* IconToolTip.swift */; };
 		DB24F90A1036197A535AD1EF /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 0B634F73CC4EC71BDA02D6C1 /* AppIcon.icns */; };
 		A7E000000000000000000007 /* SwiftTerm-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = A7E000000000000000000006 /* SwiftTerm-LICENSE.txt */; };
 		72BF66873176421CA4710701 /* Sparkle-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 72BF66873176421CA4710700 /* Sparkle-LICENSE.txt */; };
@@ -62,6 +63,7 @@
 		AADBB74B21B072F2393F28EF /* SightportMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SightportMark.swift; sourceTree = "<group>"; };
 		BF5DEE9D63689E476699FDE6 /* Sightport.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sightport.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C39999ACA3F18E584E593087 /* Style.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Style.swift; sourceTree = "<group>"; };
+		98B55BA182F842D8AD250A3E /* IconToolTip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IconToolTip.swift; sourceTree = "<group>"; };
 		CD81C20214A7245C986CFF98 /* WorkbenchInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchInspector.swift; sourceTree = "<group>"; };
 		EBFE34A5AB8FE46A92D2CABE /* sightport */ = {isa = PBXFileReference; lastKnownFileType = folder; name = sightport; path = .; sourceTree = SOURCE_ROOT; };
 		F8288046A7FE448CC6D132EF /* WorkbenchNavigator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchNavigator.swift; sourceTree = "<group>"; };
@@ -141,6 +143,7 @@
 				3890AB96ED2A106FA5798B75 /* SightportApp.swift */,
 				AADBB74B21B072F2393F28EF /* SightportMark.swift */,
 				C39999ACA3F18E584E593087 /* Style.swift */,
+				98B55BA182F842D8AD250A3E /* IconToolTip.swift */,
 				79488D99B821B22DD468F49E /* Workspace.swift */,
 			);
 			path = Sightport;
@@ -287,6 +290,7 @@
 				4F8D0538079340C631AA6054 /* SightportApp.swift in Sources */,
 				8AEED39F8A386108E3B53F57 /* SightportMark.swift in Sources */,
 				CC8BD1B6A4659B4EB9EFC518 /* Style.swift in Sources */,
+				3F1DCCABBFFC4C878600FE55 /* IconToolTip.swift in Sources */,
 				94DE3F6DF8405DD038DD498F /* Workspace.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -426,13 +430,13 @@
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.5.4;
+				MARKETING_VERSION = 0.5.5;
 				PRODUCT_BUNDLE_IDENTIFIER = app.sightport.mac;
 				SIGHTPORT_UPDATE_FEED_URL = "https://github.com/nicholaspearson/sightport/releases/latest/download/appcast.xml";
 				SIGHTPORT_UPDATE_PUBLIC_KEY = "SBN8+q6wqpwW65v0Cj0eDU3KrIxQ+KlMM20oKmi+17U=";
@@ -447,13 +451,13 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.5.4;
+				MARKETING_VERSION = 0.5.5;
 				PRODUCT_BUNDLE_IDENTIFIER = app.sightport.mac;
 				SIGHTPORT_UPDATE_FEED_URL = "https://github.com/nicholaspearson/sightport/releases/latest/download/appcast.xml";
 				SIGHTPORT_UPDATE_PUBLIC_KEY = "SBN8+q6wqpwW65v0Cj0eDU3KrIxQ+KlMM20oKmi+17U=";
