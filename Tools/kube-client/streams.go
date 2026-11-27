@@ -94,7 +94,9 @@ func podTerminal(ctx context.Context, cfg *rest.Config, namespace, pod, containe
 	return executor.StreamWithContext(ctx, streams)
 }
 
-func forwardPort(ctx context.Context, cfg *rest.Config, namespace, target, ports string) error {
+var errForwardPodChanged = errors.New("selected pod changed")
+
+func forwardPort(ctx context.Context, cfg *rest.Config, namespace, target, ports, uid string) error {
 	kind, name, ok := strings.Cut(target, "/")
 	local, remote, hasPorts := strings.Cut(ports, ":")
 	if !ok || name == "" || !hasPorts || remote == "" {
@@ -104,7 +106,7 @@ func forwardPort(ctx context.Context, cfg *rest.Config, namespace, target, ports
 	if err != nil {
 		return err
 	}
-	pod, service, err := forwardPod(ctx, client, namespace, kind, name)
+	pod, service, err := forwardPod(ctx, client, namespace, kind, name, uid)
 	if err != nil {
 		return err
 	}
@@ -135,7 +137,7 @@ func forwardPort(ctx context.Context, cfg *rest.Config, namespace, target, ports
 	return forward.ForwardPorts()
 }
 
-func forwardPod(ctx context.Context, client *rest.RESTClient, namespace, kind, name string) (*corev1.Pod, *corev1.Service, error) {
+func forwardPod(ctx context.Context, client *rest.RESTClient, namespace, kind, name, uid string) (*corev1.Pod, *corev1.Service, error) {
 	var service *corev1.Service
 	switch kind {
 	case "service":
@@ -158,6 +160,9 @@ func forwardPod(ctx context.Context, client *rest.RESTClient, namespace, kind, n
 			pod := &corev1.Pod{}
 			if err := pods.Name(name).Do(ctx).Into(pod); err != nil {
 				return false, err
+			}
+			if uid != "" && string(pod.UID) != uid {
+				return false, errForwardPodChanged
 			}
 			if pod.DeletionTimestamp != nil || pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
 				return false, errors.New("pod is not running")

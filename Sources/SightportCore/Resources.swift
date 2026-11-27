@@ -128,7 +128,9 @@ public enum ResourceKind: String, CaseIterable, Hashable, Sendable {
         let ready = ResourceField(name: "Ready", template: #"{{range .status.conditions}}{{if eq .type "Ready"}}{{urlquery .status}}{{end}}{{end}}"#)
         switch self {
         case .namespaces: return [.value("Status", ".status.phase")]
-        case .nodes: return [ready, .value("Kubelet", ".status.nodeInfo.kubeletVersion"), .value("OS", ".status.nodeInfo.osImage")]
+        case .nodes:
+            return [ready, .nodeAddresses("Internal IP", type: "InternalIP"), .nodeAddresses("External IP", type: "ExternalIP"),
+                    .value("Kubelet", ".status.nodeInfo.kubeletVersion"), .value("OS", ".status.nodeInfo.osImage")]
         case .pods: return [.value("Phase", ".status.phase"), ready, .value("Node", ".spec.nodeName")]
         case .deployments, .statefulSets, .replicaSets, .replicationControllers:
             return [.number("Ready", ".status.readyReplicas"), .number("Desired", ".spec.replicas"),
@@ -213,6 +215,12 @@ struct ResourceField {
     }
 
     static func number(_ name: String, _ path: String) -> Self { value(name, path, fallback: "0") }
+
+    static func nodeAddresses(_ name: String, type: String) -> Self {
+        Self(name: name, template: #"""
+            {{$sep := ""}}{{range .status.addresses}}{{if eq .type "\#(type)"}}{{with .address}}{{$sep}}{{urlquery .}}{{$sep = ", "}}{{end}}{{end}}{{end}}
+            """#)
+    }
 
     static func count(_ name: String, _ path: String) -> Self {
         Self(name: name, template: "{{with \(path)}}{{len .}}{{else}}0{{end}}")

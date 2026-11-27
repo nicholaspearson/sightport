@@ -50,6 +50,20 @@ final class PodInspectionTests: XCTestCase {
         XCTAssertEqual(inspected.containers["debug"]?.properties.last?.value, "2026-01-02T12:00:00Z")
     }
 
+    func testDeclaredForwardPortsIncludeTCPAndRestartableSidecarsInOrder() throws {
+        let pod = #"""
+        {"metadata":{"uid":"stable-uid","namespace":"blue","name":"worker"},"spec":{
+          "containers":[{"name":"server","ports":[{"name":"server","containerPort":8080},
+            {"name":"metrics","containerPort":8083,"protocol":"TCP"},{"name":"dns","containerPort":53,"protocol":"UDP"}]}],
+          "initContainers":[{"name":"setup","ports":[{"containerPort":1010}]},
+            {"name":"proxy","restartPolicy":"Always","ports":[{"containerPort":8080},{"containerPort":8443}]}]
+        }}
+        """#
+        let ports = try PodInspection(data: Data(pod.utf8), row: row).forwardablePorts
+        XCTAssertEqual(ports.map(\.number), [8080, 8083, 8443])
+        XCTAssertEqual(ports.map(\.name), ["server", "metrics", nil])
+    }
+
     func testImageTagAndDigestAreIndependentOfTheRegistryPort() {
         let digest = "sha256:" + String(repeating: "1", count: 64)
         let images: [(String, String?, String?)] = [

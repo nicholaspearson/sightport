@@ -89,6 +89,9 @@ struct ClusterResourceTable: View {
     private func resourceList(compact: Bool, data: ResourceTablePresentation?, filter: String) -> some View {
         let count = data?.count ?? 0
         let preparing = data == nil && !workspace.rows.isEmpty
+        let scope = section.isNamespaced ? workspace.namespaceFilter : nil
+        let missing = scope.flatMap { workspace.namespaceCatalog.isMissing($0) ? $0 : nil }
+        let checkingScope = scope != nil && workspace.namespaceCatalog == .loading && workspace.rows.isEmpty && workspace.resourceError == nil
 
         return VStack(spacing: 0) {
             let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
@@ -103,7 +106,8 @@ struct ClusterResourceTable: View {
                 }
                 HStack(spacing: compact ? 5 : 9) {
                     searchBox
-                    if section != .overview, !workspace.resourceLoading, !preparing, workspace.resourceError == nil {
+                    if section != .overview, !workspace.resourceLoading, !preparing, workspace.resourceError == nil,
+                       missing == nil, !checkingScope {
                         Text("\(count) " + (count == 1 ? "item" : "items"))
                             .font(.system(size: 10.5)).foregroundStyle(Palette.muted).fixedSize()
                             .accessibilityLabel("\(count) " + listTitle)
@@ -127,7 +131,7 @@ struct ClusterResourceTable: View {
 
             Divider()
 
-            if section.isNamespaced, let message = workspace.namespaceError {
+            if section.isNamespaced, case .unavailable(let message, _) = workspace.namespaceCatalog {
                 Label("Namespace list unavailable. You can enter a namespace by name.", systemImage: "info.circle")
                     .help(message).font(.system(size: 11)).foregroundStyle(Palette.muted)
                     .padding(.horizontal, 12).padding(.vertical, 5)
@@ -135,7 +139,17 @@ struct ClusterResourceTable: View {
                     .background(Palette.surface)
             }
 
-            if section != .overview {
+            if let missing {
+                VStack(spacing: 9) {
+                    Label("Namespace “" + missing + "” was not found.", systemImage: "exclamationmark.circle")
+                        .font(.system(size: 13, weight: .semibold))
+                    Button("View all namespaces") { workspace.setNamespace(nil) }.buttonStyle(.link)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if checkingScope {
+                ProgressView("Checking namespace…").controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if section != .overview {
                 Group {
                     if section == .argoDashboard {
                         if workspace.resourceLoading || workspace.resourceError != nil || count == 0 {
@@ -518,6 +532,7 @@ private struct NamespaceSelector: View {
         .accessibilityLabel("Select namespace").accessibilityValue(selected ?? "All namespaces")
         .help(selected ?? "All namespaces")
         .sheet(isPresented: $enterName) {
+            let missing = validName && workspace.namespaceCatalog.isMissing(namespaceName)
             VStack(alignment: .leading, spacing: 14) {
                 Text("Choose namespace").font(.headline)
                 TextField("Namespace", text: $name)
@@ -525,6 +540,9 @@ private struct NamespaceSelector: View {
                 if !name.isEmpty && !validName {
                     Text("Use up to 63 lowercase letters, digits, or hyphens. Start and end with a letter or digit.")
                         .font(.caption).foregroundStyle(.secondary)
+                } else if missing {
+                    Label("Namespace “" + namespaceName + "” was not found.", systemImage: "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(.orange)
                 }
                 HStack {
                     Spacer()
@@ -532,7 +550,7 @@ private struct NamespaceSelector: View {
                     Button("Use namespace") {
                         workspace.setNamespace(namespaceName)
                         enterName = false
-                    }.keyboardShortcut(.defaultAction).disabled(!validName)
+                    }.keyboardShortcut(.defaultAction).disabled(!validName || missing)
                 }
             }
             .padding(20).frame(width: 340)

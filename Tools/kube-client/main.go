@@ -178,7 +178,7 @@ func run(ctx context.Context, argv []string, in io.Reader, out io.Writer) error 
 		}
 	case "port-forward":
 		if len(args) == 3 && o.address == "127.0.0.1" {
-			return forwardPort(ctx, cfg, o.namespace, args[1], args[2])
+			return forwardPort(ctx, cfg, o.namespace, args[1], args[2], o.uid)
 		}
 	}
 	return errors.New("invalid operation")
@@ -187,6 +187,9 @@ func run(ctx context.Context, argv []string, in io.Reader, out io.Writer) error 
 // Emit error categories only. The server, templates and credential plugins may
 // include object contents or credential fields in their error text.
 func diagnostic(err error) string {
+	if errors.Is(err, errForwardPodChanged) {
+		return errForwardPodChanged.Error()
+	}
 	var workload workloadError
 	if errors.As(err, &workload) {
 		return string(workload)

@@ -208,7 +208,8 @@ struct NodeInspectionView: View {
     }
 
     @ViewBuilder private func forAddresses(_ node: NodeDetails) -> some View {
-        ForEach(Array((node.addresses ?? []).enumerated()), id: \.offset) { _, address in
+        let otherAddresses = (node.addresses ?? []).filter { $0.type != "InternalIP" && $0.type != "ExternalIP" }
+        ForEach(Array(otherAddresses.enumerated()), id: \.offset) { _, address in
             field(address.type, address.address)
         }
     }

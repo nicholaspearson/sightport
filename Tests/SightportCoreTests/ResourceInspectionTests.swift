@@ -3,6 +3,36 @@ import XCTest
 @testable import SightportCore
 
 final class ResourceInspectionTests: XCTestCase {
+    func testNodeTableProjectsAddressTypesAndWatchesAddressChanges() throws {
+        let kind = ResourceKind.nodes
+        let internalIP = try XCTUnwrap(kind.columns.firstIndex(of: "Internal IP"))
+        let externalIP = try XCTUnwrap(kind.columns.firstIndex(of: "External IP"))
+        let metadata = ["name": "worker", "uid": "worker-id", "resourceVersion": "7"]
+        let addresses = [["type": "Hostname", "address": "worker.test"],
+                         ["type": "ExternalIP", "address": "203.0.113.9"],
+                         ["type": "InternalIP", "address": "192.0.2.10"],
+                         ["type": "InternalIP", "address": "2001:db8::10"]]
+        let rows = try projectResource(kind, items: [
+            ["metadata": metadata, "status": ["addresses": addresses]],
+            ["metadata": ["name": "pending"]]
+        ])
+        XCTAssertEqual(rows[0].values[internalIP], "192.0.2.10, 2001:db8::10")
+        XCTAssertEqual(rows[0].values[externalIP], "203.0.113.9")
+        XCTAssertEqual(rows[1].values[internalIP], "")
+        XCTAssertEqual(rows[1].values[externalIP], "")
+
+        let target = ResourceWatchTarget.resource(kind)
+        let event: [String: Any] = ["type": "MODIFIED", "object": [
+            "metadata": metadata, "status": ["addresses": [["type": "InternalIP", "address": "192.0.2.12"]]]
+        ]]
+        let update = try renderProjection(target.watchTemplate, object: event)
+        let fields = String(decoding: update, as: UTF8.self).dropLast().split(separator: "\u{1f}", maxSplits: 1)
+        let changed = try ResourceRowDecoder(target).decode(Data(try XCTUnwrap(fields.last).utf8), separator: "\u{1f}")
+        XCTAssertEqual(changed.id, rows[0].id)
+        XCTAssertEqual(changed.values[internalIP], "192.0.2.12")
+        XCTAssertEqual(changed.values[externalIP], "")
+    }
+
     func testNodeAndServiceAccountWatchChangesInvalidateDetails() throws {
         for kind in [ResourceKind.nodes, .serviceAccounts] {
             let target = ResourceWatchTarget.resource(kind)

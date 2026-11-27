@@ -7,8 +7,16 @@ public struct PortForwardRequest: Equatable, Sendable {
     public let kind: PortForwardTargetKind
     public let namespace: String
     public let name: String
+    public private(set) var podUID: String?
     public let localPort: UInt16?
     public let remotePort: String
+
+    public init(pod row: ResourceRow, localPort: String, remotePort: String) throws {
+        guard !row.id.isEmpty, !row.id.utf8.contains(0) else { throw KubernetesError.podIdentityMissing }
+        try self.init(kind: .pod, namespace: row.namespace ?? "", name: row.name,
+                      localPort: localPort, remotePort: remotePort)
+        podUID = row.id
+    }
 
     public init(kind: PortForwardTargetKind, namespace: String, name: String,
                 localPort: String, remotePort: String) throws {
@@ -191,6 +199,7 @@ private final class ForwardWorker: @unchecked Sendable {
         if line.contains("address already in use") { return "This local port is already in use. Choose another port or leave it blank." }
         if line.contains("forbidden") { return "The cluster denied access to port forwarding for this target." }
         if line.contains("unauthorized") || line.contains("getting credentials") { return "Refresh your cluster credentials and try again." }
+        if line == "selected pod changed" { return "The selected pod was replaced. Select the current pod and try again." }
         if line.contains("not found") || line.contains("notfound") { return "The namespace, target or remote port could not be found." }
         if line.contains("does not have") && line.contains("port") { return "The target does not expose that port." }
         if line.contains("without a selector") || line.contains("defined without a selector") { return "This service has no pod selector." }

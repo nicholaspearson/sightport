@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -101,5 +102,20 @@ func TestForwardPortResolution(t *testing.T) {
 		if port != test.want || (err == nil) != (test.want > 0) {
 			t.Errorf("%s => %d, %v", test.port, port, err)
 		}
+	}
+}
+
+func TestForwardingSelectedPodRejectsReusedName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/namespaces/gitops/pods/argocd-server" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"argocd-server","uid":"new"},"status":{"phase":"Running"}}`)
+	}))
+	defer server.Close()
+	err := forwardPort(context.Background(), &rest.Config{Host: server.URL}, "gitops", "pod/argocd-server", ":8080", "original")
+	if !errors.Is(err, errForwardPodChanged) || diagnostic(err) != "selected pod changed" {
+		t.Fatalf("expected replacement to prevent a tunnel, got %v", err)
 	}
 }

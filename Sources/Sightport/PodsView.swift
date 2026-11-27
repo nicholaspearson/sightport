@@ -87,6 +87,7 @@ struct PodsTable: View {
     let scrollID: AnyHashable
     @Binding var checked: Set<String>
     @Binding var sort: [KeyPathComparator<PodTableItem>]
+    @State private var forwardingPod: ResourceRow?
 
     private struct CellAppearance: Hashable {
         let checked: Set<String>
@@ -110,6 +111,9 @@ struct PodsTable: View {
                                  scrollID: scrollID, columns: columns, selection: selection, sortOrder: $sort,
                                  onInteraction: { workspace.keepTabOpen(.cluster(.resources(.pods))) },
                                  menu: { actions(for: $0.row) }, doubleClick: { workspace.inspectPod($0.row) })
+            .sheet(item: $forwardingPod) { row in
+                if let context { PortForwardEditor(manager: workspace.portForwards, context: context, pod: row) }
+            }
     }
 
     private var columns: [LiveColumn<PodTableItem>] {
@@ -173,6 +177,9 @@ struct PodsTable: View {
             workspace.openPodLogs(row)
         }
         menu.addAction("Open terminal…", enabled: !row.runningContainerNames.isEmpty) { workspace.openPodTerminal(row) }
+        menu.addAction("Forward port…", enabled: row.namespace != nil && row.pod?.isTerminating == false) {
+            forwardingPod = row
+        }
         menu.addAction("Copy namespace/name") { copyPodNames([row]) }
         menu.addItem(.separator())
         if row.namespace != nil { menu.addAction("Show namespace") { workspace.showNamespace(of: row) } }
@@ -260,6 +267,7 @@ struct PodInspector: View {
     @State private var annotationsExpanded = false
     @State private var copySucceeded: Bool?
     @State private var copyAttempt = 0
+    @State private var forwarding = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -285,6 +293,11 @@ struct PodInspector: View {
         .font(.system(size: 12)).foregroundStyle(Palette.ink)
         .background(Palette.canvas)
         .disclosureGroupStyle(InspectorDisclosureStyle())
+        .sheet(isPresented: $forwarding) {
+            if let context = workspace.connectedContext {
+                PortForwardEditor(manager: workspace.portForwards, context: context, pod: row)
+            }
+        }
         .task(id: copyAttempt) {
             guard copySucceeded != nil else { return }
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
@@ -311,6 +324,8 @@ struct PodInspector: View {
                 .disabled(row.namespace == nil || row.pod?.containers.isEmpty != false)
             IconAction(symbol: "terminal", title: "Open terminal") { workspace.openPodTerminal(row) }
                 .disabled(row.runningContainerNames.isEmpty)
+            IconAction(symbol: "arrow.left.arrow.right", title: "Forward port…") { forwarding = true }
+                .disabled(row.namespace == nil || row.pod?.isTerminating != false)
             IconAction(symbol: copySucceeded.map { $0 ? "checkmark" : "exclamationmark.triangle" } ?? "doc.on.doc",
                        title: "Copy namespace/name") {
                 let succeeded = copyPodNames([row])

@@ -9,6 +9,13 @@ public struct KubeContext: Identifiable, Hashable, Sendable {
     public let isCurrent: Bool
 }
 
+public struct KubeconfigSource: Sendable {
+    public let file: URL
+    public let explicitlyListed: Bool
+    public let imported: Bool
+    public let directoryCandidate: Bool
+}
+
 public struct KubernetesClient: Sendable {
     private let environment: [String: String]
     private let homeDirectory: URL
@@ -57,6 +64,51 @@ public struct KubernetesClient: Sendable {
         }
     }
 
+    public func sourceCandidates(imported: [URL]) -> [KubeconfigSource] {
+        let siblings = siblingKubeconfigCandidates()
+        // Configured paths win so that a discovered alias keeps the existing context IDs and favorites.
+        let siblingPaths = Set(siblings.map { $0.resolvingSymlinksInPath().path })
+        let defaults = defaultSources().map { (file: $0, listed: true, imported: false) }
+        let manual = imported.map { (file: $0, listed: true, imported: true) }
+        let discovered = siblings.map { (file: $0, listed: false, imported: false) }
+        var seen = Set<String>()
+        return (defaults + manual + discovered).compactMap { entry in
+            let path = entry.file.resolvingSymlinksInPath().path
+            guard seen.insert(path).inserted else { return nil }
+            return KubeconfigSource(file: entry.file.standardizedFileURL, explicitlyListed: entry.listed,
+                                    imported: entry.imported, directoryCandidate: siblingPaths.contains(path))
+        }
+    }
+
+    private func siblingKubeconfigCandidates() -> [URL] {
+        if let override = environment["KUBECONFIG"], !override.isEmpty { return [] }
+        let directory = homeDirectory.appendingPathComponent(".kube", isDirectory: true)
+        guard let entries = try? FileManager.default.contentsOfDirectory(at: directory,
+                includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else { return [] }
+        let excludedNames = ["credentials", "credentials.json", "token", "password", "kuberc"]
+        let excludedExtensions = ["bak", "backup", "old", "orig", "lock", "tmp", "swp",
+                                  "pem", "key", "crt", "cer", "p12", "pfx"]
+        return entries.filter { file in
+            let name = file.lastPathComponent.lowercased()
+            let ext = file.pathExtension.lowercased()
+            guard !name.hasSuffix("~"), !excludedNames.contains(name), !excludedExtensions.contains(ext),
+                  name.hasPrefix("config.") || name.hasPrefix("kubeconfig.") ||
+                  ["", "yaml", "yml", "json", "conf", "kubeconfig"].contains(ext) else { return false }
+            return (try? file.resolvingSymlinksInPath().resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    public func readContexts(from source: KubeconfigSource) async throws -> [KubeContext]? {
+        do {
+            let found = try await contexts(in: source.file)
+            return found.isEmpty && !source.explicitlyListed ? nil : found
+        } catch {
+            // Unrelated YAML and JSON may live alongside kubeconfigs. Only surface errors for configured files.
+            if source.explicitlyListed { throw error }
+            return nil
+        }
+    }
+
     public func contexts(in file: URL) async throws -> [KubeContext] {
         // Read only local context metadata. The users and clusters sections may contain secrets.
         let output = try await run(["contexts"], file: file, operation: .discovery)
@@ -83,6 +135,21 @@ public struct KubernetesClient: Sendable {
     public func resources(_ kind: ResourceKind, in file: URL, context: String,
                           namespace: String? = nil) async throws -> [ResourceRow] {
         try await listResourceRows(.resource(kind), in: file, context: context, namespace: namespace)
+    }
+
+    /// A namespaced workload LIST can succeed with zero items even when its namespace is missing.
+    /// A named GET can check existence for users who cannot list namespaces. Forbidden is inconclusive.
+    public func namespaceExists(_ name: String, in file: URL, context: String) async throws -> Bool? {
+        guard !context.isEmpty else { throw KubernetesError.missingContext }
+        let name = try PortForwardRequest.validatedNamespace(name)
+        let arguments = ["--context=" + context, "--request-timeout=8s", "get", "namespaces/" + name,
+                         "-o", "go-template={{.metadata.name}}"]
+        do {
+            let data = try await run(arguments, file: file, operation: .namespaceLookup(name))
+            guard String(decoding: data, as: UTF8.self) == name else { throw KubernetesError.unavailable }
+            return true
+        } catch KubernetesError.namespaceMissing { return false }
+        catch KubernetesError.resourceDenied { return nil }
     }
 
     func listResourceRows(_ target: ResourceWatchTarget, in file: URL, context: String,
@@ -174,9 +241,10 @@ public struct KubernetesClient: Sendable {
         guard !context.isEmpty, !context.utf8.contains(0) else { throw KubernetesError.missingContext }
         let executable = try executable(for: file)
         let local = request.localPort.map { String($0) } ?? ""
-        let arguments = ["--kubeconfig=\(file.path)", "--context=\(context)", "--namespace=\(request.namespace)",
-                         "port-forward", "--address=127.0.0.1",
-                         request.kind.rawValue + "/" + request.name, local + ":" + request.remotePort]
+        var arguments = ["--kubeconfig=\(file.path)", "--context=\(context)", "--namespace=\(request.namespace)",
+                         "port-forward", "--address=127.0.0.1"]
+        if let uid = request.podUID { arguments.append("--uid=" + uid) }
+        arguments += [request.kind.rawValue + "/" + request.name, local + ":" + request.remotePort]
         return try PortForwardSession(executable: executable, arguments: arguments, environment: sdkEnvironment,
                                       onStatus: onStatus)
     }
@@ -268,6 +336,7 @@ private struct ContextList: Decodable {
 }
 
 enum ClusterOperation {
+    case namespaceLookup(String)
     case workloadAction
     case inspection(NodeOperation?)
     case discovery, connection, resources(ResourceKind, String?), podMetrics, podLogs, podInspection
@@ -360,6 +429,13 @@ enum KubernetesError: LocalizedError {
         if case .discovery = operation { return .invalidContexts }
         // Credential helpers control stderr. Use it only for classification, never for display or storage.
         let message = String(decoding: stderr, as: UTF8.self).lowercased()
+        if case .namespaceLookup(let name) = operation {
+            switch message.split(whereSeparator: \.isNewline).last {
+            case "not found", "namespaces not found": return .namespaceMissing(name)
+            case "forbidden": return .resourceDenied(.namespaces, nil)
+            default: break
+            }
+        }
         if case .workloadAction = operation {
             let diagnostic = String(message.split(whereSeparator: \.isNewline).last ?? "")
             switch diagnostic {

@@ -67,6 +67,29 @@ final class PortForwardTests: XCTestCase {
         wait(for: [failed], timeout: 3)
     }
 
+    func testForwardFromPodInspectorPinsNamespaceNameAndUID() throws {
+        let row = ResourceRow(id: "selected-uid", name: "argocd-server-abc", namespace: "gitops", createdAt: nil, values: [])
+        let request = try PortForwardRequest(pod: row, localPort: "", remotePort: "8080")
+        let client = try fixture(#"""
+        printf '%s\n' "$@" > "$FIXTURE/args"
+        echo 'selected pod changed' >&2
+        exit 1
+        """#)
+        let failed = expectation(description: "Replaced pod")
+        let session = try client.openPortForward(in: file, context: "development", request: request) { status in
+            guard case .failed(let message) = status else { return }
+            XCTAssertTrue(message.contains("replaced"))
+            failed.fulfill()
+        }
+        defer { session.stop() }
+        wait(for: [failed], timeout: 3)
+        let args = try String(contentsOf: directory.appendingPathComponent("args"), encoding: .utf8)
+        XCTAssertEqual(args.split(separator: "\n").map(String.init), [
+            "--kubeconfig=" + file.path, "--context=development", "--namespace=gitops",
+            "port-forward", "--address=127.0.0.1", "--uid=selected-uid", "pod/argocd-server-abc", ":8080"
+        ])
+    }
+
     func testValidatesPortsAndMandatoryTargetScope() {
         for (namespace, name, local, remote) in [
             ("", "api", "", "80"), ("default", "svc/name", "8080", "80"),

@@ -30,6 +30,42 @@ final class KubernetesTests: XCTestCase {
                        [other, config])
     }
 
+    func testDiscoversIndividualKubeconfigsAndSkipsOtherFiles() async throws {
+        let kube = folder.appendingPathComponent(".kube", isDirectory: true)
+        try FileManager.default.createDirectory(at: kube, withIntermediateDirectories: true)
+        let yaml = """
+        apiVersion: v1
+        kind: Config
+        contexts:
+        - name: example
+          context: {cluster: local}
+        """
+        for name in ["config.dev", "config.prod", "staging.yaml", "config.old", "config.key", "credentials.json", ".hidden.yaml"] {
+            try yaml.write(to: kube.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let cache = kube.appendingPathComponent("cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        try yaml.write(to: cache.appendingPathComponent("ignored.yaml"), atomically: true, encoding: .utf8)
+        try "apiVersion: v1\nkind: Service\n".write(to: kube.appendingPathComponent("service.yaml"),
+                                                    atomically: true, encoding: .utf8)
+        let manual = folder.appendingPathComponent("imported config")
+        try FileManager.default.createSymbolicLink(at: manual, withDestinationURL: kube.appendingPathComponent("staging.yaml"))
+        let client = KubernetesClient(environment: [:], homeDirectory: folder, sdkExecutable: try TestSDK.executable.get())
+        let candidates = client.sourceCandidates(imported: [manual])
+        XCTAssertEqual(candidates.map(\.file.lastPathComponent), ["imported config", "config.dev", "config.prod", "service.yaml"])
+        var sources: [URL] = []
+        for candidate in candidates {
+            if let contexts = try await client.readContexts(from: candidate) {
+                XCTAssertEqual(contexts.map(\.name), ["example"])
+                sources.append(candidate.file)
+            }
+        }
+        XCTAssertEqual(sources.map(\.lastPathComponent), ["imported config", "config.dev", "config.prod"])
+
+        let override = KubernetesClient(environment: ["KUBECONFIG": manual.path], homeDirectory: folder)
+        XCTAssertEqual(override.sourceCandidates(imported: []).map(\.file), [manual.standardizedFileURL])
+    }
+
     func testReadsRealKubeconfigLocallyIncludingCurrentContextAndNamespace() async throws {
         let marker = folder.appendingPathComponent("helper-ran")
         let config = folder.appendingPathComponent("fixture.yaml")
@@ -138,6 +174,30 @@ final class KubernetesTests: XCTestCase {
             XCTAssertTrue(error.localizedDescription.contains("timed out"))
             XCTAssertLessThan(Date().timeIntervalSince(start), 3)
         }
+    }
+
+    func testNamedNamespaceLookupDistinguishesMissingFromRestrictedAccess() async throws {
+        let config = folder.appendingPathComponent("fixture config")
+        try Data().write(to: config)
+        let client = try fakeClient("""
+        case "$5" in
+          namespaces/empty-but-present) printf '%s' empty-but-present ;;
+          namespaces/missing-namespace) echo 'namespaces not found' >&2; exit 1 ;;
+          namespaces/restricted) echo Forbidden >&2; exit 1 ;;
+          namespaces/offline) echo timeout >&2; exit 1 ;;
+          *) exit 2 ;;
+        esac
+        """)
+        let present = try await client.namespaceExists("empty-but-present", in: config, context: "fixture")
+        let missing = try await client.namespaceExists("missing-namespace", in: config, context: "fixture")
+        let restricted = try await client.namespaceExists("restricted", in: config, context: "fixture")
+        XCTAssertEqual(present, true)
+        XCTAssertEqual(missing, false)
+        XCTAssertNil(restricted)
+        do {
+            _ = try await client.namespaceExists("offline", in: config, context: "fixture")
+            XCTFail("Connection errors must remain distinct from missing namespaces")
+        } catch KubernetesError.timeout {}
     }
 
     private func fakeClient(_ script: String, environment: [String: String] = [:],

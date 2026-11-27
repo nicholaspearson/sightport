@@ -84,7 +84,13 @@ public struct PodContainerInspection: Sendable {
 }
 
 public struct PodInspection: Sendable {
+    public struct TCPPort: Equatable, Sendable {
+        public let number: UInt16
+        public let name: String?
+    }
+
     public let containers: [String: PodContainerInspection]
+    public let forwardablePorts: [TCPPort]
 
     init(data: Data, row: ResourceRow) throws {
         let pod: PodDocument
@@ -105,6 +111,14 @@ public struct PodInspection: Sendable {
         collect(pod.spec.initContainers, pod.status?.initContainerStatuses)
         collect(pod.spec.ephemeralContainers, pod.status?.ephemeralContainerStatuses)
         containers = byName
+
+        let sidecars = (pod.spec.initContainers ?? []).filter { $0.restartPolicy == "Always" }
+        var seen = Set<UInt16>()
+        forwardablePorts = ((pod.spec.containers ?? []) + sidecars).flatMap { $0.ports ?? [] }.compactMap { port in
+            guard (port.protocol ?? "TCP") == "TCP", let number = UInt16(exactly: port.containerPort),
+                  number > 0, seen.insert(number).inserted else { return nil }
+            return TCPPort(number: number, name: port.name)
+        }
     }
 }
 
@@ -138,6 +152,7 @@ private struct ContainerSpec: Decodable {
     struct Port: Decodable { let name: String?; let containerPort: Int; let `protocol`: String? }
     struct Resources: Decodable { let requests, limits: [String: String]? }
     let name: String
+    let restartPolicy: String?
     let image, imagePullPolicy, workingDir: String?
     let command, args: [String]?
     let ports: [Port]?

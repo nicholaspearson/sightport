@@ -6,7 +6,7 @@ Download the Sightport ZIP for Intel and Apple silicon Macs, unzip it, and move 
 
 ## Using Sightport
 
-1. Open Sightport. It reads contexts from `~/.kube/config`, or from the individual files in `KUBECONFIG` when that variable is present in the app’s environment. Use **Open kubeconfig** (⌘O) to add another file.
+1. Open Sightport. It reads `~/.kube/config` and discovers individual kubeconfigs alongside it, including `config.*` and YAML files. If `KUBECONFIG` is set in the app’s environment, Sightport uses the files it lists. Use **Open kubeconfig** (⌘O) to add a file from another location.
 2. Open **Contexts** to see the available contexts. Double-click a row to connect, or select it and choose **Connect**. Sightport uses that exact file and context to request the API version and makes the context active when the request succeeds. Your kubeconfig’s authentication method runs for this request.
 3. The left rail shows the connected context and your favorites. Click a context’s star in the table to favorite it. Right-click a rail entry for **Connect** or **Disconnect**. Disconnecting closes that context’s cluster tabs, terminals and port forwards. A favorite stays in the rail for the next connection.
 4. Right-click a context in the table or rail and choose **Remove from Sightport…** to remove it from this workspace. Removing a connected context closes its cluster sessions. Your kubeconfig remains available to other tools. To restore removed contexts from a file, reopen it with **Open kubeconfig** (⌘O).
@@ -15,7 +15,7 @@ After a successful connection, Sightport opens **Namespaces**. Double-click a na
 
 Browsing resources reuses one italicized preview tab. Selecting a row, searching, sorting, or opening logs keeps the tab open. Double-click the tab or choose **Keep Tab Open** from its context menu to keep it explicitly.
 
-Double-click a **Node** to open its inspector on the right and view scheduling, conditions, addresses, capacity and labels. The inspector header offers its YAML manifest, **Drain node…** and **Delete node…**. Draining cordons the node and requests pod evictions subject to disruption budgets. Check the node’s scheduling state after a drain.
+The **Nodes** table shows internal and external IP addresses. Enter an IPv4 or IPv6 address in the search field to find its node. Double-click a node to open its inspector on the right and view scheduling, conditions, addresses, capacity and labels. The inspector header offers its YAML manifest, **Drain node…** and **Delete node…**. Draining cordons the node and requests pod evictions subject to disruption budgets. Check the node’s scheduling state after a drain.
 
 In **Deployments**, choose **View Logs** and use the **Pod** and **Container** selectors in the bottom drawer. **Restart Rollout…** is available on Deployments, DaemonSets and StatefulSets. Under **Cron Jobs**, **Start Job…** creates a one-off run. Under **Jobs**, **Start Job…** resumes a suspended Job and **Run Again…** creates a new Job from the selected run.
 
@@ -28,7 +28,7 @@ The namespace selector applies to namespaced resources and the workload overview
 The visible Kubernetes resource list follows watch events. Pods appear and disappear automatically, and status, readiness, restarts, and selected details update in place. Sightport reconnects when a watch ends. If a watch is unavailable, it refreshes the list every five seconds while retrying. The workload overview and Helm releases refresh every 15 seconds. Switching views, minimizing, or closing the window stops the corresponding reads. Press ⌘R for an immediate refresh.
 
 - **Network** contains Services, Endpoint Slices, Endpoints, Ingresses, Ingress Classes and Network Policies. Expand **Gateway API** to browse gateway classes, gateways, routes and policies served by your cluster.
-- **Network → Port Forwarding** lets you start and stop local TCP forwards to a pod or service. Choose **New Forward…**, enter a namespace, target and remote port, then start it. A blank local port assigns an available port. The view shows the listening address on `127.0.0.1`. Forwards stay active while you browse other tabs and stop when you change clusters or close the window.
+- Choose **Forward port…** in a pod’s inspector or row menu to forward a port on that pod. For example, select the Argo CD server pod, choose its web port and click **Start Forward**. **Network → Port Forwarding** shows the listening address on `127.0.0.1` and lets you open it in a browser or stop the forward. Choose **New Forward…** there to target another pod or service. A blank local port assigns an available port. Forwards stay active while you browse other tabs and stop when you change clusters or close the window.
 - **Storage** shows Persistent Volume Claims, Persistent Volumes and Storage Classes. **Events** shows recent activity, including the affected object, reason, message and last observation.
 - **Helm → Releases** shows release status, revision, chart and application version. This view uses a local Helm 3 or 4 executable and the selected kubeconfig context.
 - **Access Control** lists Service Accounts, Cluster Roles, Roles, Cluster Role Bindings and Role Bindings. Select a Service Account to read its annotations, including an IAM role ARN when configured. Inspect a role for its rules or a binding for its role and subjects.

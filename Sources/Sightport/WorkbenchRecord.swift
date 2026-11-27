@@ -175,7 +175,7 @@ struct RecordMenu: View {
             Button("Remove from Sightport…", role: .destructive) { workspace.requestContextRemoval(id) }
         case .file(let source):
             Button("Browse contexts") { workspace.open(.file(source.url)) }
-            if workspace.canForget(source.url) {
+            if source.canForget {
                 Button("Remove file from list") { workspace.forget(source.url) }
             }
         }

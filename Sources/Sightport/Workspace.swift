@@ -89,6 +89,7 @@ struct SourceFile: Identifiable {
     let url: URL
     var contexts: [KubeContext] = []
     var error: String?
+    var canForget = false
 }
 
 struct WorkspaceAlert: Identifiable {
@@ -177,6 +178,20 @@ enum Reachability: Equatable {
     case failed(String)
 }
 
+enum NamespaceCatalog: Equatable {
+    case loading
+    case listed([String])
+    case unavailable(message: String, missing: String?)
+
+    func isMissing(_ name: String) -> Bool {
+        switch self {
+        case .listed(let names): return !names.contains(name)
+        case .unavailable(_, let missing): return missing == name
+        case .loading: return false
+        }
+    }
+}
+
 @MainActor
 final class Workspace: ObservableObject {
     let portForwards = PortForwardManager()
@@ -203,8 +218,11 @@ final class Workspace: ObservableObject {
     @Published private(set) var pollingAfterWatchFailure = false
     @Published private(set) var resourceLoading = false
     @Published private(set) var resourceError: String?
-    @Published private(set) var namespaceNames: [String] = []
-    @Published private(set) var namespaceError: String?
+    @Published private(set) var namespaceCatalog: NamespaceCatalog = .loading
+    var namespaceNames: [String] {
+        if case .listed(let names) = namespaceCatalog { return names }
+        return []
+    }
     @Published private(set) var namespaceFilter: String?
     @Published private(set) var customResourceGroups: [CustomResourceGroup] = []
     @Published private(set) var customResourceCatalogError: String?
@@ -503,30 +521,39 @@ final class Workspace: ObservableObject {
         let previousID = connectedContext
         let previousContext = previousID.flatMap { context(for: $0) }
         checks = checks.filter { $0.key == connectedContext }
-        var seen = Set<String>()
-        let files = (client.defaultSources() + otherPaths.map { URL(fileURLWithPath: $0) })
-            .map(\.standardizedFileURL).filter { seen.insert($0.path).inserted }
+        let candidates = client.sourceCandidates(imported: otherPaths.map { URL(fileURLWithPath: $0) })
         let previous = sources
-        sources = files.map { file in previous.first { $0.url == file } ?? SourceFile(url: file) }
-        for tab in tabs {
-            if case .file(let url) = tab, !files.contains(url) {
-                if tabs.count == 1 { open(.contexts) }
-                close(tab)
-            }
+        sources = candidates.compactMap { candidate in
+            if let known = previous.first(where: { $0.url == candidate.file }) { return known }
+            return candidate.explicitlyListed ? SourceFile(url: candidate.file, canForget: candidate.imported) : nil
         }
-        loading = !files.isEmpty
+        loading = !candidates.isEmpty
         readTask = Task {
-            for file in files {
-                var source = SourceFile(url: file)
+            for candidate in candidates {
+                let file = candidate.file
+                var source = SourceFile(url: file, canForget: candidate.imported)
                 do {
-                    let contexts = try await client.contexts(in: file)
+                    let found = try await client.readContexts(from: candidate)
+                    guard !Task.isCancelled else { return }
+                    guard let contexts = found else {
+                        sources.removeAll { $0.url == file }
+                        continue
+                    }
+                    if candidate.directoryCandidate && !contexts.isEmpty { source.canForget = false }
                     source.contexts = contexts.filter { !removedContexts.contains(ContextID(file: file, name: $0.name)) }
                 }
                 catch { source.error = error.localizedDescription }
                 guard !Task.isCancelled else { return }
                 if let index = sources.firstIndex(where: { $0.url == file }) { sources[index] = source }
+                else { sources.append(source) }
             }
             guard !Task.isCancelled else { return }
+            for tab in tabs {
+                if case .file(let url) = tab, !sources.contains(where: { $0.url == url }) {
+                    if tabs.count == 1 { open(.contexts) }
+                    close(tab)
+                }
+            }
             if let pendingConnection, context(for: pendingConnection) == nil { cancelConnectionAttempt() }
             if let connectedContext, previousID == connectedContext,
                context(for: connectedContext) == nil || context(for: connectedContext)?.cluster != previousContext?.cluster {
@@ -558,18 +585,16 @@ final class Workspace: ObservableObject {
     }
 
     func openKubeconfig(_ file: URL) {
-        let url = file.standardizedFileURL
+        let resolved = file.resolvingSymlinksInPath()
+        let url = sources.first(where: { $0.url.resolvingSymlinksInPath() == resolved })?.url ?? file.standardizedFileURL
         if removedContexts.contains(where: { $0.file == url }),
            !updatePreferences({ $0.restoreContexts(in: url) }) { return }
-        if !client.defaultSources().map(\.standardizedFileURL).contains(url), !otherPaths.contains(url.path) {
+        if !sources.contains(where: { $0.url == url }), !client.defaultSources().map(\.standardizedFileURL).contains(url),
+           !otherPaths.contains(url.path) {
             defaults.set(otherPaths + [url.path], forKey: "sourceFiles")
         }
         refreshSources()
         open(.file(url))
-    }
-
-    func canForget(_ url: URL) -> Bool {
-        otherPaths.contains(url.path) && !client.defaultSources().map(\.standardizedFileURL).contains(url)
     }
 
     func forget(_ url: URL) {
@@ -601,8 +626,7 @@ extension Workspace {
         portForwards.stopAll()
         closePodLogs()
         closePodTerminals()
-        namespaceNames = []
-        namespaceError = nil
+        namespaceCatalog = .loading
         namespaceFilter = nil
         connectedContext = nil
         clearResourceTable()
@@ -746,8 +770,14 @@ extension Workspace {
                 await observeRows(.resources(.namespaces), in: id, scope: nil, onRows: { result in
                     self.updateNamespaces(result)
                 }, onError: { error in
-                    self.namespaceError = error.localizedDescription
-                    self.namespaceNames = []
+                    // Namespace-scoped RBAC can allow workload reads without a cluster-wide namespace list.
+                    var missing: String?
+                    if let scope, (try? await self.client.namespaceExists(scope, in: id.file, context: id.name)) == false {
+                        missing = scope
+                    }
+                    guard !Task.isCancelled else { return }
+                    let catalog = NamespaceCatalog.unavailable(message: error.localizedDescription, missing: missing)
+                    if self.namespaceCatalog != catalog { self.namespaceCatalog = catalog }
                 })
             }
         }
@@ -776,8 +806,7 @@ extension Workspace {
                     }
                     if let target = self.podLogTarget, section == .resources(target.kind) { self.closePodLogs() }
                     if section == .resources(.namespaces) {
-                        self.namespaceError = error.localizedDescription
-                        self.namespaceNames = []
+                        self.namespaceCatalog = .unavailable(message: error.localizedDescription, missing: nil)
                     }
                     if section == .resources(.customResourceDefinitions) {
                         self.applyCustomResourceCatalog([], error: error.localizedDescription)
@@ -791,7 +820,7 @@ extension Workspace {
 
     private func observeRows(_ section: ClusterSection, in id: ContextID, scope: String?, followsTable: Bool = true,
                              onRows: @escaping @MainActor ([ResourceRow]) async -> Void,
-                             onError: @escaping @MainActor (Error) -> Void,
+                             onError: @escaping @MainActor (Error) async -> Void,
                              onPolling: @escaping @MainActor (Bool) -> Void = { _ in }) async {
         let generation = resourceGeneration
         let target: ResourceWatchTarget?
@@ -839,7 +868,7 @@ extension Workspace {
                     await onRows(snapshot)
                 } catch {
                     guard !Task.isCancelled else { return }
-                    onError(error)
+                    await onError(error)
                 }
                 do { try await Task.sleep(for: .seconds(target == nil ? 15 : 5)) }
                 catch { return }
@@ -848,9 +877,8 @@ extension Workspace {
     }
 
     private func updateNamespaces(_ result: [ResourceRow]) {
-        let names = result.map(\.name).sorted()
-        if names != namespaceNames { namespaceNames = names }
-        if namespaceError != nil { namespaceError = nil }
+        let catalog = NamespaceCatalog.listed(result.map(\.name).sorted())
+        if catalog != namespaceCatalog { namespaceCatalog = catalog }
     }
 
     private func applyRows(_ result: [ResourceRow], section: ClusterSection, context: ContextID, namespace: String?) async {

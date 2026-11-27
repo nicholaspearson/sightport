@@ -44,6 +44,7 @@ final class PortForwardManager: ObservableObject {
 
 struct PortForwardingView: View {
     @EnvironmentObject private var workspace: Workspace
+    @Environment(\.openURL) private var openURL
     @ObservedObject var manager: PortForwardManager
     let context: ContextID
     let namespace: String?
@@ -108,6 +109,14 @@ struct PortForwardingView: View {
             case .listening(let port):
                 Text("127.0.0.1:\(String(port))").monospacedDigit().foregroundStyle(Palette.forest)
                     .textSelection(.enabled)
+                Menu("Open in browser") {
+                    ForEach(["https", "http"], id: \.self) { scheme in
+                        Button("Open \(scheme.uppercased())") {
+                            if let url = URL(string: "\(scheme)://127.0.0.1:\(String(port))/") { openURL(url) }
+                        }
+                    }
+                }
+                .fixedSize()
                 Button("Stop") { manager.remove(entry.id) }
             case .failed, .stopped:
                 Button("Dismiss") { manager.remove(entry.id) }
@@ -121,17 +130,20 @@ struct PortForwardingView: View {
     }
 }
 
-private struct PortForwardEditor: View {
+struct PortForwardEditor: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var workspace: Workspace
     let manager: PortForwardManager
     let context: ContextID
     let namespaces: [String]
-    @State var namespace: String
+    @State private var namespace: String
+    private var pod: ResourceRow?
     @State private var kind: PortForwardTargetKind = .pod
     @State private var name = ""
     @State private var remote = ""
     @State private var local = ""
     @State private var options: [String] = []
+    @State private var ports: [PodInspection.TCPPort] = []
     @State private var error: String?
 
     private struct Lookup: Equatable {
@@ -139,35 +151,50 @@ private struct PortForwardEditor: View {
         let namespace: String
     }
 
+    init(manager: PortForwardManager, context: ContextID, namespaces: [String], namespace: String) {
+        self.manager = manager
+        self.context = context
+        self.namespaces = namespaces
+        _namespace = State(initialValue: namespace)
+    }
+
+    init(manager: PortForwardManager, context: ContextID, pod: ResourceRow) {
+        self.init(manager: manager, context: context, namespaces: [], namespace: pod.namespace ?? "")
+        self.pod = pod
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("New port forward").font(.headline)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
-                GridRow {
-                    Text("Target type")
-                    Picker("Target type", selection: $kind) {
-                        Text("Pod").tag(PortForwardTargetKind.pod)
-                        Text("Service").tag(PortForwardTargetKind.service)
+                if let pod {
+                    GridRow {
+                        Text("Namespace")
+                        Text(verbatim: namespace)
                     }
-                    .pickerStyle(.segmented).labelsHidden()
-                }
-                GridRow {
-                    Text("Namespace")
-                    HStack(spacing: 4) {
-                        TextField("Namespace", text: $namespace)
-                        choices("Choose namespace", options: namespaces, selection: $namespace)
+                    GridRow {
+                        Text("Pod")
+                        Text(verbatim: pod.name).textSelection(.enabled)
                     }
-                }
-                GridRow {
-                    Text(kind == .pod ? "Pod name" : "Service name")
-                    HStack(spacing: 4) {
-                        TextField(kind == .pod ? "Pod name" : "Service name", text: $name)
-                        choices("Choose target", options: options, selection: $name)
-                    }
+                } else {
+                    targetFields
                 }
                 GridRow {
                     Text("Remote port")
-                    TextField("Number or port name", text: $remote)
+                    HStack(spacing: 4) {
+                        TextField("Number or port name", text: $remote)
+                        if !ports.isEmpty {
+                            Menu {
+                                ForEach(ports, id: \.number) { port in
+                                    Button(String(port.number) + (port.name.map { " · " + $0 } ?? "")) {
+                                        remote = String(port.number)
+                                    }
+                                }
+                            } label: { Image(systemName: "chevron.down") }
+                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                            .accessibilityLabel("Choose TCP port").help("Choose a TCP port declared by the pod")
+                        }
+                    }
                 }
                 GridRow {
                     Text("Local port")
@@ -179,13 +206,22 @@ private struct PortForwardEditor: View {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Start Forward") { start() }.keyboardShortcut(.defaultAction)
-                    .disabled(name.isEmpty || namespace.isEmpty || remote.isEmpty)
+                    .disabled((pod == nil && name.isEmpty) || namespace.isEmpty || remote.isEmpty)
             }
         }
         .padding(20).frame(width: 403)
         .onChange(of: kind) { _, _ in name = ""; options = [] }
         .onChange(of: namespace) { _, _ in options = [] }
         .task(id: Lookup(kind: kind, namespace: namespace)) {
+            if let pod {
+                do {
+                    let inspection = try await manager.client.inspectPod(for: pod, in: context.file, context: context.name)
+                    guard !Task.isCancelled else { return }
+                    ports = inspection.forwardablePorts
+                    if remote.isEmpty, let first = ports.first { remote = String(first.number) }
+                } catch { /* A port can still be entered manually. */ }
+                return
+            }
             let ns = namespace.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !ns.isEmpty else { return }
             do {
@@ -194,6 +230,31 @@ private struct PortForwardEditor: View {
                 guard !Task.isCancelled else { return }
                 options = names
             } catch { /* Manual entry also works with permission to forward but no permission to list. */ }
+        }
+    }
+
+    @ViewBuilder private var targetFields: some View {
+        GridRow {
+            Text("Target type")
+            Picker("Target type", selection: $kind) {
+                Text("Pod").tag(PortForwardTargetKind.pod)
+                Text("Service").tag(PortForwardTargetKind.service)
+            }
+            .pickerStyle(.segmented).labelsHidden()
+        }
+        GridRow {
+            Text("Namespace")
+            HStack(spacing: 4) {
+                TextField("Namespace", text: $namespace)
+                choices("Choose namespace", options: namespaces, selection: $namespace)
+            }
+        }
+        GridRow {
+            Text(kind == .pod ? "Pod name" : "Service name")
+            HStack(spacing: 4) {
+                TextField(kind == .pod ? "Pod name" : "Service name", text: $name)
+                choices("Choose target", options: options, selection: $name)
+            }
         }
     }
 
@@ -211,9 +272,19 @@ private struct PortForwardEditor: View {
 
     private func start() {
         do {
-            let request = try PortForwardRequest(kind: kind, namespace: namespace, name: name, localPort: local, remotePort: remote)
+            let request: PortForwardRequest
+            if let pod {
+                request = try PortForwardRequest(pod: pod, localPort: local, remotePort: remote)
+            } else {
+                request = try PortForwardRequest(kind: kind, namespace: namespace, name: name, localPort: local, remotePort: remote)
+            }
             try manager.start(request, in: context)
             dismiss()
+            if pod != nil {
+                workspace.keepTabOpen()
+                workspace.open(.cluster(.portForwarding))
+                workspace.keepTabOpen()
+            }
         } catch { self.error = error.localizedDescription }
     }
 }
